@@ -1,0 +1,90 @@
+@import url("https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap");
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html,
+body {
+  background: #0a0f1e;
+  color: #f0f4ff;
+  font-family: "DM Sans", sans-serif;
+  font-feature-settings: "ss01", "cv01";
+}
+
+* {
+  box-sizing: border-box;
+}
+
+::selection {
+  background: #00d4ff;
+  color: #0a0f1e;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: #0a0f1e; }
+::-webkit-scrollbar-thumb { background: #1e2d45; border-radius: 6px; }
+::-webkit-scrollbar-thumb:hover { background: #2d4a6b; }
+
+/* Prose overrides for the dark report */
+.prose-zap {
+  color: #f0f4ff;
+}
+.prose-zap h1, .prose-zap h2, .prose-zap h3, .prose-zap h4 {
+  color: #f0f4ff;
+  font-family: "DM Sans", sans-serif;
+  letter-spacing: -0.01em;
+}
+.prose-zap h2 {
+  font-size: 18px;
+  font-weight: 700;
+  margin-top: 1.5rem;
+  margin-bottom: 0.5rem;
+  border-bottom: 1px solid #1e2d45;
+  padding-bottom: 0.4rem;
+}
+.prose-zap h3 {
+  font-size: 15px;
+  font-weight: 600;
+  color: #00d4ff;
+  margin-top: 1rem;
+  margin-bottom: 0.4rem;
+}
+.prose-zap p { color: #cbd5e1; line-height: 1.7; }
+.prose-zap strong { color: #f0f4ff; }
+.prose-zap em { color: #ffb800; font-style: normal; font-weight: 500; }
+.prose-zap a { color: #00d4ff; text-decoration: underline; text-decoration-color: #0a4f5e; }
+.prose-zap ul, .prose-zap ol { color: #cbd5e1; padding-left: 1.25rem; }
+.prose-zap li { margin: 0.25rem 0; }
+.prose-zap code {
+  background: #0f1929;
+  color: #00d4ff;
+  padding: 0.1rem 0.35rem;
+  border-radius: 4px;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 0.85em;
+}
+.prose-zap blockquote {
+  border-left: 3px solid #00d4ff;
+  background: #0f1929;
+  padding: 0.5rem 1rem;
+  color: #8892a4;
+  margin: 0.75rem 0;
+}
+
+@keyframes pulse-glow {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(0, 212, 255, 0.4); }
+  50%      { box-shadow: 0 0 0 8px rgba(0, 212, 255, 0); }
+}
+.pulse-glow { animation: pulse-glow 1.8s ease-in-out infinite; }
+
+@keyframes shimmer {
+  0%   { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+.shimmer {
+  background: linear-gradient(90deg, transparent, rgba(0,212,255,0.08), transparent);
+  background-size: 200% 100%;
+  animation: shimmer 2s ease-in-out infinite;
+}
