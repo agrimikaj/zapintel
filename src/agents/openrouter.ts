@@ -58,7 +58,7 @@ export async function completeChat(
       Authorization: `Bearer ${getApiKey()}`,
       "Content-Type": "application/json",
       "HTTP-Referer": "https://zapintel.vercel.app",
-      "X-Title": "ZapIntel — Zapsight Client Intelligence",
+      "X-Title": "ZapIntel - Zapsight Client Intelligence",
     },
     body: JSON.stringify(body),
   });
