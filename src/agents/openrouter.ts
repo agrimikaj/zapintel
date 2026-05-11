@@ -1,9 +1,11 @@
 /**
- * OpenRouter client.
+ * OpenRouter client (plain fetch).
  *
- * OpenRouter exposes an OpenAI-compatible API at https://openrouter.ai/api/v1.
- * We use the openai SDK as the transport and route to Claude (or any other
- * supported model) via the `model` field.
+ * We previously used the `openai` SDK, but on Vercel's serverless Node
+ * runtime the SDK wrapped real failures as a generic "Connection error",
+ * making it impossible to diagnose. Switched to plain fetch against
+ * OpenRouter's OpenAI-compatible /chat/completions endpoint. Errors now
+ * surface with HTTP status + provider message.
  *
  * Env vars:
  *   OPENROUTER_API_KEY   — required.
@@ -11,36 +13,20 @@
  *   OPENROUTER_BASE_URL  — default "https://openrouter.ai/api/v1".
  */
 
-import OpenAI from "openai";
-
 const BASE_URL =
   process.env.OPENROUTER_BASE_URL || "https://openrouter.ai/api/v1";
 
 export const DEFAULT_MODEL =
   process.env.OPENROUTER_MODEL || "anthropic/claude-sonnet-4.5";
 
-let _client: OpenAI | null = null;
-
-export function getClient(): OpenAI {
-  if (_client) return _client;
-
-  const apiKey = process.env.OPENROUTER_API_KEY;
-  if (!apiKey) {
+function getApiKey(): string {
+  const key = process.env.OPENROUTER_API_KEY;
+  if (!key) {
     throw new Error(
-      "OPENROUTER_API_KEY is not set. Add it to .env.local or to the Vercel project's environment variables.",
+      "OPENROUTER_API_KEY is not set. Add it to .env.local locally, or to the Vercel project's Environment Variables in production.",
     );
   }
-
-  _client = new OpenAI({
-    apiKey,
-    baseURL: BASE_URL,
-    defaultHeaders: {
-      "HTTP-Referer": "https://zapintel.vercel.app",
-      "X-Title": "ZapIntel — Zapsight Client Intelligence",
-    },
-  });
-
-  return _client;
+  return key;
 }
 
 export interface ChatMessage {
@@ -48,41 +34,60 @@ export interface ChatMessage {
   content: string;
 }
 
-export async function* streamChat(
-  messages: ChatMessage[],
-  opts: { model?: string; maxTokens?: number; temperature?: number } = {},
-): AsyncGenerator<string, void, unknown> {
-  const client = getClient();
-  const model = opts.model || DEFAULT_MODEL;
-
-  const stream = await client.chat.completions.create({
-    model,
-    messages,
-    stream: true,
-    max_tokens: opts.maxTokens ?? 3500,
-    temperature: opts.temperature ?? 0.4,
-  });
-
-  for await (const chunk of stream) {
-    const delta = chunk.choices?.[0]?.delta?.content;
-    if (delta) yield delta;
-  }
+interface ChatCompletionResponse {
+  choices?: { message?: { content?: string } }[];
+  error?: { message?: string; code?: string | number };
 }
 
 export async function completeChat(
   messages: ChatMessage[],
   opts: { model?: string; maxTokens?: number; temperature?: number } = {},
 ): Promise<string> {
-  const client = getClient();
   const model = opts.model || DEFAULT_MODEL;
-
-  const response = await client.chat.completions.create({
+  const body = {
     model,
     messages,
-    stream: false,
     max_tokens: opts.maxTokens ?? 3500,
     temperature: opts.temperature ?? 0.4,
+    stream: false,
+  };
+
+  const res = await fetch(`${BASE_URL}/chat/completions`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${getApiKey()}`,
+      "Content-Type": "application/json",
+      "HTTP-Referer": "https://zapintel.vercel.app",
+      "X-Title": "ZapIntel — Zapsight Client Intelligence",
+    },
+    body: JSON.stringify(body),
   });
 
-  return response.choices?.[0]?.message?.content?.trim() || "";
+  const raw = await res.text();
+
+  if (!res.ok) {
+    // Try to surface the OpenRouter error message; fall back to status.
+    let detail = raw;
+    try {
+      const parsed = JSON.parse(raw) as ChatCompletionResponse;
+      if (parsed.error?.message) detail = parsed.error.message;
+    } catch {
+      /* not JSON */
+    }
+    throw new Error(`OpenRouter ${res.status}: ${detail.slice(0, 400)}`);
+  }
+
+  let parsed: ChatCompletionResponse;
+  try {
+    parsed = JSON.parse(raw) as ChatCompletionResponse;
+  } catch {
+    throw new Error(`OpenRouter returned non-JSON: ${raw.slice(0, 200)}`);
+  }
+
+  if (parsed.error?.message) {
+    throw new Error(`OpenRouter error: ${parsed.error.message}`);
+  }
+
+  const content = parsed.choices?.[0]?.message?.content?.trim() || "";
+  return content;
 }
