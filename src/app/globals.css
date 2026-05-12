@@ -88,3 +88,29 @@ body {
   background-size: 200% 100%;
   animation: shimmer 2s ease-in-out infinite;
 }
+
+@media print {
+  html, body {
+    background: #ffffff !important;
+    color: #111111 !important;
+  }
+  .prose-zap, .prose-zap p, .prose-zap li, .prose-zap h1, .prose-zap h2, .prose-zap h3, .prose-zap h4, .prose-zap strong {
+    color: #111111 !important;
+  }
+  .prose-zap h2 { border-bottom: 1px solid #cccccc; }
+  .prose-zap h3 { color: #003a4f !important; }
+  .prose-zap a { color: #003a4f !important; }
+  .prose-zap code { background: #f3f3f3 !important; color: #003a4f !important; }
+  .prose-zap em { color: #6b4a00 !important; }
+  .prose-zap blockquote {
+    background: #fafafa !important;
+    border-left-color: #003a4f !important;
+    color: #444 !important;
+  }
+  section, article {
+    page-break-inside: avoid;
+    border-color: #cccccc !important;
+    box-shadow: none !important;
+    background: #ffffff !important;
+  }
+}
