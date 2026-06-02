@@ -23,6 +23,14 @@ tsconfig.tsbuildinfo
 .founder-summary.pdf
 .founder-zip.zip
 .founder-results.json
+.recover-247.mjs
+.recover-247-results.json
+.recover-247-progress.log
+.bundle-247-partial.mjs
+zapsight-outreach-*-PARTIAL.*
+zapsight-outreach-*-PARTIAL/
+zapsight-outreach-*-RECOVERY.*
+zapsight-outreach-*-RECOVERY/
 .test-bulk.mjs
 .test-multipass.mjs
 .test-output/
@@ -30,4 +38,6 @@ tsconfig.tsbuildinfo
 
 # Sample input files that Sarah drops into the repo to feed the bulk feature
 MyContacts_export_*.csv
+247 Leads*.csv
+247 Leads*.xlsx
 Outreach*.pdf

@@ -16,18 +16,23 @@
  * Server side is single-lead-per-request — see route comment.
  */
 
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
   CheckCircle2,
+  Clock,
   Download,
   FileSpreadsheet,
+  History,
   Loader2,
   Play,
+  RotateCcw,
+  Save,
   Search,
   Trash2,
   Upload,
   Users,
+  X,
   XCircle,
 } from "lucide-react";
 import JSZip from "jszip";
@@ -37,6 +42,19 @@ import {
   SummaryDocType,
   SummaryRow,
 } from "@/lib/summaryPdf";
+import {
+  archiveCurrentBulkRun,
+  BulkRunSummary,
+  clearCurrentBulkRun,
+  deleteArchivedBulkRun,
+  listArchivedBulkRuns,
+  loadArchivedBulkRun,
+  loadCurrentBulkRun,
+  newBulkRun,
+  PersistedBulkRun,
+  PersistedRow,
+  saveCurrentBulkRun,
+} from "@/lib/bulkPersistence";
 
 type RowStatus = "pending" | "running" | "completed" | "failed";
 type Verdict = "Accepted" | "Rejected" | "Unknown";
@@ -157,6 +175,51 @@ function topSignalLine(signals?: ServerSignal[]): string {
   return `${date}${s.label.split(" (")[0]}${s.sourceName ? ` (${s.sourceName})` : ""}`;
 }
 
+// ----- Persistence helpers -----
+function persistRowFromState(r: RowState): PersistedRow {
+  // Anything "running" at save time is treated as "pending" — when restored,
+  // the user can re-run those rows. A running row whose API call dies is
+  // already indistinguishable from a pending row.
+  const status: PersistedRow["status"] =
+    r.status === "completed" || r.status === "failed" ? r.status : "pending";
+  return {
+    leadId: r.lead.id,
+    lead: r.lead,
+    status,
+    intelMarkdown: r.intelMarkdown,
+    outreachMarkdown: r.outreachMarkdown,
+    critiqueMarkdown: r.critiqueMarkdown,
+    verdict: r.verdict,
+    confidence: r.confidence,
+    rejectionClass: r.rejectionClass,
+    mainReason: r.mainReason,
+    docType: r.docType,
+    vertical: r.vertical,
+    signals: r.signals,
+    error: r.error,
+    durationMs: r.durationMs,
+  };
+}
+
+function rowStateFromPersisted(p: PersistedRow): RowState {
+  return {
+    lead: p.lead,
+    status: p.status,
+    intelMarkdown: p.intelMarkdown,
+    outreachMarkdown: p.outreachMarkdown,
+    critiqueMarkdown: p.critiqueMarkdown,
+    verdict: p.verdict,
+    confidence: p.confidence,
+    rejectionClass: p.rejectionClass,
+    mainReason: p.mainReason,
+    docType: p.docType,
+    vertical: p.vertical,
+    signals: p.signals,
+    error: p.error,
+    durationMs: p.durationMs,
+  };
+}
+
 export function BulkOutreach() {
   const [filename, setFilename] = useState<string | null>(null);
   const [rows, setRows] = useState<RowState[]>([]);
@@ -164,7 +227,62 @@ export function BulkOutreach() {
   const [isRunning, setIsRunning] = useState(false);
   const [dropping, setDropping] = useState(false);
   const [deepMode, setDeepMode] = useState(false);
+  // Persistence state
+  const [restorePrompt, setRestorePrompt] = useState<PersistedBulkRun | null>(null);
+  const [showSessions, setShowSessions] = useState(false);
+  const [sessions, setSessions] = useState<BulkRunSummary[]>([]);
+  const [storageWarning, setStorageWarning] = useState<string | null>(null);
+  const [lastSavedAt, setLastSavedAt] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const skipNextSaveRef = useRef(false);
+
+  // --- 1. On mount: check for a saved run and offer to restore --------
+  useEffect(() => {
+    const saved = loadCurrentBulkRun();
+    if (saved && saved.rows.length > 0) {
+      // Only prompt if there are completed/failed rows worth restoring.
+      const hasUseful = saved.rows.some(
+        (r) => r.status === "completed" || r.status === "failed",
+      );
+      if (hasUseful) setRestorePrompt(saved);
+    }
+    setSessions(listArchivedBulkRuns());
+  }, []);
+
+  // --- 2. Throttled auto-save whenever rows / filename / deepMode change.
+  useEffect(() => {
+    if (skipNextSaveRef.current) {
+      skipNextSaveRef.current = false;
+      return;
+    }
+    if (rows.length === 0) return;
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = setTimeout(() => {
+      const run: PersistedBulkRun = {
+        id: "current",
+        schemaVersion: 1,
+        savedAt: new Date().toISOString(),
+        filename,
+        deepMode,
+        rows: rows.map(persistRowFromState),
+      };
+      const result = saveCurrentBulkRun(run);
+      if (!result.ok) {
+        setStorageWarning(
+          result.reason === "no_storage"
+            ? "Browser storage is unavailable — auto-save off. Export current JSON to preserve."
+            : `Auto-save failed (${result.reason}). Export current JSON to preserve.`,
+        );
+      } else {
+        setStorageWarning(null);
+        setLastSavedAt(new Date().toISOString());
+      }
+    }, 800);
+    return () => {
+      if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    };
+  }, [rows, filename, deepMode]);
 
   const counts = useMemo(() => {
     const out = {
@@ -197,18 +315,74 @@ export function BulkOutreach() {
   const anyCompleted = counts.completed > 0;
 
   const ingestFile = useCallback(async (file: File) => {
+    // Archive any existing current run before starting fresh, so the user
+    // doesn't lose prior work on a new upload.
+    const cur = loadCurrentBulkRun();
+    if (cur && cur.rows.some((r) => r.status === "completed" || r.status === "failed")) {
+      archiveCurrentBulkRun();
+      setSessions(listArchivedBulkRuns());
+    } else {
+      clearCurrentBulkRun();
+    }
+    setRestorePrompt(null);
     setParseError(null);
     setFilename(file.name);
     try {
       const buf = await file.arrayBuffer();
       const leads = parseLeadFile(buf, file.name);
+      // Reset the persisted run to a fresh shell before the auto-save tick
+      // writes the new rows over.
+      const fresh = newBulkRun(file.name, deepMode);
+      saveCurrentBulkRun(fresh);
       setRows(leads.map((l) => ({ lead: l, status: "pending" as const })));
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       setParseError(msg);
       setRows([]);
     }
+  }, [deepMode]);
+
+  // Restore from a previous run (current or archived).
+  const restoreRun = useCallback((run: PersistedBulkRun) => {
+    skipNextSaveRef.current = false;
+    setFilename(run.filename);
+    setDeepMode(run.deepMode);
+    setRows(run.rows.map(rowStateFromPersisted));
+    setRestorePrompt(null);
+    setShowSessions(false);
+    setStorageWarning(null);
   }, []);
+
+  const discardRestorePrompt = useCallback(() => {
+    setRestorePrompt(null);
+    clearCurrentBulkRun();
+  }, []);
+
+  const openSession = useCallback((id: string) => {
+    const archived = loadArchivedBulkRun(id);
+    if (archived) restoreRun(archived);
+  }, [restoreRun]);
+
+  const removeSession = useCallback((id: string) => {
+    deleteArchivedBulkRun(id);
+    setSessions(listArchivedBulkRuns());
+  }, []);
+
+  const exportCurrentJson = useCallback(() => {
+    const run: PersistedBulkRun = {
+      id: "current",
+      schemaVersion: 1,
+      savedAt: new Date().toISOString(),
+      filename,
+      deepMode,
+      rows: rows.map(persistRowFromState),
+    };
+    const blob = new Blob([JSON.stringify(run, null, 2)], {
+      type: "application/json",
+    });
+    const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+    downloadBlob(blob, `zapsight-bulk-state-${stamp}.json`);
+  }, [filename, deepMode, rows]);
 
   const onFileInput = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -231,10 +405,13 @@ export function BulkOutreach() {
 
   const clearAll = useCallback(() => {
     abortRef.current?.abort();
+    skipNextSaveRef.current = true;
     setRows([]);
     setFilename(null);
     setParseError(null);
     setIsRunning(false);
+    setLastSavedAt(null);
+    clearCurrentBulkRun();
   }, []);
 
   const updateRow = useCallback((id: string, patch: Partial<RowState>) => {
@@ -449,16 +626,56 @@ export function BulkOutreach() {
             includes a founder-ready summary PDF.
           </p>
         </div>
-        {rows.length > 0 && (
+        <div className="flex shrink-0 flex-wrap items-center gap-2">
           <button
-            onClick={clearAll}
-            className="flex shrink-0 items-center gap-1.5 rounded-lg border border-edge-default bg-bg-elevated px-3 py-2 font-mono text-xs uppercase tracking-wider text-ink-secondary hover:border-accent-red hover:text-accent-red"
-            title="Discard the uploaded list"
+            onClick={() => {
+              setSessions(listArchivedBulkRuns());
+              setShowSessions(true);
+            }}
+            className="flex items-center gap-1.5 rounded-lg border border-edge-default bg-bg-elevated px-3 py-2 font-mono text-xs uppercase tracking-wider text-ink-secondary hover:border-accent-cyan hover:text-accent-cyan"
+            title="Restore a previously saved bulk run"
           >
-            <Trash2 size={12} /> Clear
+            <History size={12} /> Sessions
+            {sessions.length > 0 && (
+              <span className="ml-1 rounded-full bg-accent-cyan/20 px-1.5 text-[10px] text-accent-cyan">
+                {sessions.length}
+              </span>
+            )}
           </button>
-        )}
+          {rows.length > 0 && (
+            <button
+              onClick={clearAll}
+              className="flex items-center gap-1.5 rounded-lg border border-edge-default bg-bg-elevated px-3 py-2 font-mono text-xs uppercase tracking-wider text-ink-secondary hover:border-accent-red hover:text-accent-red"
+              title="Discard the uploaded list (saved to Sessions automatically)"
+            >
+              <Trash2 size={12} /> Clear
+            </button>
+          )}
+        </div>
       </div>
+
+      {restorePrompt && (
+        <RestoreBanner
+          run={restorePrompt}
+          onRestore={() => restoreRun(restorePrompt)}
+          onDiscard={discardRestorePrompt}
+        />
+      )}
+
+      {storageWarning && (
+        <div className="mt-4 flex items-start gap-2 rounded-xl border border-accent-amber/40 bg-accent-amber/10 p-3 font-mono text-xs text-accent-amber">
+          <AlertTriangle size={14} className="mt-0.5 shrink-0" />
+          <div className="flex-1">
+            <div>{storageWarning}</div>
+            <button
+              onClick={exportCurrentJson}
+              className="mt-1.5 inline-flex items-center gap-1.5 rounded-md border border-accent-amber/40 bg-accent-amber/10 px-2 py-1 text-[11px] hover:bg-accent-amber/20"
+            >
+              <Download size={11} /> Export JSON now
+            </button>
+          </div>
+        </div>
+      )}
 
       {rows.length === 0 && (
         <label
@@ -503,6 +720,21 @@ export function BulkOutreach() {
             <div className="flex items-center gap-1.5 font-mono text-xs text-ink-secondary">
               <FileSpreadsheet size={14} className="text-accent-cyan" />
               {filename || "uploaded"} · <b className="text-ink-primary">{rows.length}</b> leads
+              {lastSavedAt && (
+                <span
+                  className="ml-1 inline-flex items-center gap-1 text-accent-emerald"
+                  title={`Auto-saved to browser at ${new Date(lastSavedAt).toLocaleTimeString()}. Survives tab refresh + close.`}
+                >
+                  <Save size={10} /> saved
+                </span>
+              )}
+              <button
+                onClick={exportCurrentJson}
+                className="ml-1 rounded-md border border-edge-default bg-bg-surface px-2 py-0.5 text-[10px] uppercase tracking-wider text-ink-tertiary hover:border-accent-cyan hover:text-accent-cyan"
+                title="Export current run as JSON (paranoia backup)"
+              >
+                Export JSON
+              </button>
             </div>
             <div className="flex flex-wrap items-center gap-2 font-mono text-[11px] uppercase tracking-wider">
               <span className="text-accent-cyan">{counts.running} running</span>
@@ -633,7 +865,177 @@ export function BulkOutreach() {
           </div>
         </>
       )}
+
+      {showSessions && (
+        <SessionsDrawer
+          sessions={sessions}
+          onClose={() => setShowSessions(false)}
+          onOpen={openSession}
+          onDelete={removeSession}
+        />
+      )}
     </section>
+  );
+}
+
+function RestoreBanner({
+  run,
+  onRestore,
+  onDiscard,
+}: {
+  run: PersistedBulkRun;
+  onRestore: () => void;
+  onDiscard: () => void;
+}) {
+  let completed = 0;
+  let failed = 0;
+  let accepted = 0;
+  let rejected = 0;
+  for (const r of run.rows) {
+    if (r.status === "completed") {
+      completed++;
+      if (r.verdict === "Accepted") accepted++;
+      else if (r.verdict === "Rejected") rejected++;
+    } else if (r.status === "failed") failed++;
+  }
+  return (
+    <div className="mt-4 rounded-xl border border-accent-emerald/40 bg-accent-emerald/5 p-4">
+      <div className="flex flex-wrap items-start gap-3">
+        <div className="flex-1">
+          <div className="flex items-center gap-2 font-mono text-xs uppercase tracking-wider text-accent-emerald">
+            <RotateCcw size={14} /> Previous bulk run found
+          </div>
+          <div className="mt-1.5 text-sm text-ink-primary">
+            <b>{run.filename || "uploaded file"}</b> · {run.rows.length} leads · {completed} completed (
+            {accepted}<span className="text-accent-emerald">✓</span> ·{" "}
+            {rejected}<span className="text-accent-red">✕</span>){failed > 0 ? `, ${failed} failed` : ""}
+          </div>
+          <div className="mt-0.5 font-mono text-[11px] text-ink-tertiary">
+            Saved {new Date(run.savedAt).toLocaleString()}
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={onRestore}
+            className="flex items-center gap-1.5 rounded-lg bg-accent-emerald px-3 py-2 font-mono text-xs uppercase tracking-wider text-bg-primary hover:bg-accent-cyan"
+          >
+            <RotateCcw size={14} /> Restore
+          </button>
+          <button
+            onClick={onDiscard}
+            className="flex items-center gap-1.5 rounded-lg border border-edge-default bg-bg-elevated px-3 py-2 font-mono text-xs uppercase tracking-wider text-ink-secondary hover:border-accent-red hover:text-accent-red"
+          >
+            <Trash2 size={12} /> Discard
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function SessionsDrawer({
+  sessions,
+  onClose,
+  onOpen,
+  onDelete,
+}: {
+  sessions: BulkRunSummary[];
+  onClose: () => void;
+  onOpen: (id: string) => void;
+  onDelete: (id: string) => void;
+}) {
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-end justify-end bg-black/50 backdrop-blur-sm"
+      onClick={onClose}
+    >
+      <div
+        className="h-full w-full max-w-md overflow-y-auto border-l border-edge-default bg-bg-surface p-5 shadow-2xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="mb-4 flex items-center justify-between">
+          <div>
+            <h3 className="flex items-center gap-2 text-lg font-bold text-ink-primary">
+              <History size={16} className="text-accent-cyan" /> Saved bulk runs
+            </h3>
+            <p className="mt-0.5 font-mono text-[11px] text-ink-tertiary">
+              Up to 10 most recent runs kept in your browser. Tab refresh / close
+              safe — always restorable.
+            </p>
+          </div>
+          <button
+            onClick={onClose}
+            className="rounded-lg p-1.5 text-ink-secondary hover:bg-bg-elevated hover:text-accent-red"
+            aria-label="Close sessions drawer"
+          >
+            <X size={16} />
+          </button>
+        </div>
+
+        {sessions.length === 0 ? (
+          <div className="rounded-lg border border-edge-default bg-bg-elevated p-4 text-center font-mono text-xs text-ink-tertiary">
+            No archived runs yet. The current run is saved automatically as it
+            progresses.
+          </div>
+        ) : (
+          <ul className="space-y-2">
+            {sessions.map((s) => (
+              <li
+                key={s.id}
+                className="rounded-lg border border-edge-default bg-bg-elevated p-3 hover:border-accent-cyan/50"
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate text-sm text-ink-primary">
+                      {s.filename || "untitled run"}
+                    </div>
+                    <div className="mt-1 font-mono text-[11px] text-ink-tertiary">
+                      <Clock size={10} className="mr-1 inline" />
+                      {new Date(s.savedAt).toLocaleString()}
+                    </div>
+                    <div className="mt-1.5 flex flex-wrap items-center gap-2 font-mono text-[11px] uppercase tracking-wider">
+                      <span className="text-ink-tertiary">{s.total} leads</span>
+                      <span className="text-accent-emerald">{s.completed} done</span>
+                      {s.completed > 0 && (
+                        <span className="text-ink-tertiary">
+                          ({s.accepted}<span className="text-accent-emerald">✓</span> ·{" "}
+                          {s.rejected}<span className="text-accent-red">✕</span>)
+                        </span>
+                      )}
+                      {s.failed > 0 && (
+                        <span className="text-accent-red">{s.failed} failed</span>
+                      )}
+                      {s.deepMode && (
+                        <span className="rounded-full border border-accent-amber/40 bg-accent-amber/10 px-1.5 text-accent-amber">
+                          deep
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                  <div className="flex shrink-0 flex-col gap-1.5">
+                    <button
+                      onClick={() => onOpen(s.id)}
+                      className="flex items-center gap-1 rounded-md bg-accent-cyan px-2.5 py-1 font-mono text-[11px] uppercase tracking-wider text-bg-primary hover:bg-accent-emerald"
+                    >
+                      <RotateCcw size={11} /> Open
+                    </button>
+                    <button
+                      onClick={() => {
+                        if (confirm("Delete this saved run permanently?"))
+                          onDelete(s.id);
+                      }}
+                      className="flex items-center gap-1 rounded-md border border-edge-default bg-bg-surface px-2.5 py-1 font-mono text-[11px] uppercase tracking-wider text-ink-tertiary hover:border-accent-red hover:text-accent-red"
+                    >
+                      <Trash2 size={10} /> Delete
+                    </button>
+                  </div>
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    </div>
   );
 }
 
