@@ -10,10 +10,9 @@ export interface ProgressRailDimension {
 
 interface Props {
   dimensions: ProgressRailDimension[];
-  summaryStatus: "idle" | "running" | "completed" | "failed";
 }
 
-export function ProgressRail({ dimensions, summaryStatus }: Props) {
+export function ProgressRail({ dimensions }: Props) {
   const total = dimensions.length;
   const done = dimensions.filter((d) => d.status === "completed").length;
   const failed = dimensions.filter((d) => d.status === "failed").length;
@@ -81,24 +80,6 @@ export function ProgressRail({ dimensions, summaryStatus }: Props) {
             </li>
           );
         })}
-        <li
-          className={`mt-3 flex items-center gap-2.5 border-t border-edge-default px-2.5 pt-3 ${
-            summaryStatus === "running" ? "bg-accent-cyan/5" : ""
-          }`}
-        >
-          {summaryStatus === "completed" ? (
-            <CheckCircle2 size={14} className="text-accent-emerald" />
-          ) : summaryStatus === "running" ? (
-            <Loader2 size={14} className="animate-spin text-accent-cyan" />
-          ) : summaryStatus === "failed" ? (
-            <XCircle size={14} className="text-accent-red" />
-          ) : (
-            <Circle size={14} className="text-ink-tertiary" />
-          )}
-          <span className="text-sm font-bold text-ink-primary">
-            Executive Synthesis
-          </span>
-        </li>
       </ul>
 
       {(running > 0 || failed > 0) && (

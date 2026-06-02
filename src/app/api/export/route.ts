@@ -5,7 +5,6 @@ export const runtime = "nodejs";
 interface ExportBody {
   companyName?: string;
   websiteUrl?: string;
-  summary?: string;
   dimensions?: { label: string; findings: string; status: string }[];
 }
 
@@ -27,12 +26,6 @@ export async function POST(req: NextRequest) {
   lines.push("");
   lines.push("---");
   lines.push("");
-  if (body.summary) {
-    lines.push(body.summary);
-    lines.push("");
-    lines.push("---");
-    lines.push("");
-  }
   for (const d of body.dimensions ?? []) {
     lines.push(`## ${d.label}`);
     if (d.status !== "completed") lines.push(`_status: ${d.status}_`);

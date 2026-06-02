@@ -1,7 +1,16 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { FileText, Trash2, X, Calendar, ExternalLink, FolderOpen } from "lucide-react";
+import {
+  FileText,
+  Trash2,
+  X,
+  Calendar,
+  ExternalLink,
+  FolderOpen,
+  Loader2,
+  AlertTriangle,
+} from "lucide-react";
 import {
   deleteSavedReport,
   listSavedReports,
@@ -31,14 +40,36 @@ function relativeTime(iso: string): string {
 
 export function SavedReportsDrawer({ open, onClose, onOpenReport, refreshKey }: Props) {
   const [reports, setReports] = useState<SavedReport[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (open) setReports(listSavedReports());
+    if (!open) return;
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+    listSavedReports()
+      .then((rows) => {
+        if (!cancelled) setReports(rows);
+      })
+      .catch((err) => {
+        if (!cancelled) setError(err instanceof Error ? err.message : String(err));
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [open, refreshKey]);
 
-  function handleDelete(id: string) {
-    deleteSavedReport(id);
-    setReports(listSavedReports());
+  async function handleDelete(id: string) {
+    try {
+      await deleteSavedReport(id);
+      setReports((prev) => prev.filter((r) => r.id !== id));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
   }
 
   if (!open) return null;
@@ -59,7 +90,7 @@ export function SavedReportsDrawer({ open, onClose, onOpenReport, refreshKey }: 
             <div>
               <div className="font-bold text-ink-primary">Saved Reports</div>
               <div className="font-mono text-[10px] uppercase tracking-wider text-ink-tertiary">
-                {reports.length} stored locally
+                {loading ? "loading…" : `${reports.length} stored`}
               </div>
             </div>
           </div>
@@ -73,7 +104,23 @@ export function SavedReportsDrawer({ open, onClose, onOpenReport, refreshKey }: 
         </div>
 
         <div className="p-5">
-          {reports.length === 0 ? (
+          {loading && (
+            <div className="flex items-center justify-center gap-2 py-12 font-mono text-xs uppercase tracking-wider text-ink-tertiary">
+              <Loader2 size={14} className="animate-spin" /> Loading reports…
+            </div>
+          )}
+
+          {!loading && error && (
+            <div className="flex items-start gap-2 rounded-xl border border-accent-red/40 bg-accent-redMuted/30 p-4 text-sm text-accent-red">
+              <AlertTriangle size={16} className="mt-0.5 flex-shrink-0" />
+              <div>
+                <div className="font-bold">Couldn't load reports</div>
+                <div className="font-mono text-xs">{error}</div>
+              </div>
+            </div>
+          )}
+
+          {!loading && !error && reports.length === 0 && (
             <div className="rounded-xl border border-dashed border-edge-default p-8 text-center">
               <FileText size={28} className="mx-auto mb-2 text-ink-tertiary" />
               <div className="font-mono text-xs uppercase tracking-wider text-ink-tertiary">
@@ -81,10 +128,12 @@ export function SavedReportsDrawer({ open, onClose, onOpenReport, refreshKey }: 
               </div>
               <p className="mt-2 text-sm text-ink-secondary">
                 Generate a report, then hit <span className="text-accent-cyan">Save</span> to keep
-                it. Reports live in this browser.
+                it. Reports sync to your Zapsight account.
               </p>
             </div>
-          ) : (
+          )}
+
+          {!loading && !error && reports.length > 0 && (
             <ul className="space-y-3">
               {reports.map((r) => (
                 <li

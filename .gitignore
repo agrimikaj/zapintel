@@ -14,3 +14,20 @@ coverage
 next-env.d.ts
 
 .vercel
+
+# Build / TS scratch
+tsconfig.tsbuildinfo
+
+# Local agent scratch (founder PDF runs, ad-hoc bulk tests, sample uploads)
+.gen-founder-pdf.mjs
+.founder-summary.pdf
+.founder-zip.zip
+.founder-results.json
+.test-bulk.mjs
+.test-multipass.mjs
+.test-output/
+.test-multipass-output/
+
+# Sample input files that Sarah drops into the repo to feed the bulk feature
+MyContacts_export_*.csv
+Outreach*.pdf

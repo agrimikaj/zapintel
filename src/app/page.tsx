@@ -1,26 +1,28 @@
 "use client";
 
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Activity,
   Check,
   FolderOpen,
+  LogOut,
   RefreshCw,
   Save,
   Zap,
 } from "lucide-react";
 import { ProspectForm, ProspectFormValues } from "@/components/ProspectForm";
 import { DimensionCard } from "@/components/DimensionCard";
-import { ExecutiveSummary } from "@/components/ExecutiveSummary";
 import { ProgressRail } from "@/components/ProgressRail";
 import { SavedReportsDrawer } from "@/components/SavedReportsDrawer";
 import { DownloadMenu } from "@/components/DownloadMenu";
+import { BulkOutreach } from "@/components/BulkOutreach";
 import {
   exportReportAsMarkdown,
   SavedReport,
   saveReport,
   slugify,
 } from "@/lib/storage";
+import { getBrowserSupabase } from "@/lib/supabase/client";
 
 type DimStatus = "pending" | "running" | "completed" | "failed";
 
@@ -58,15 +60,30 @@ function downloadBlob(content: string, filename: string, mime: string) {
 export default function HomePage() {
   const [prospect, setProspect] = useState<ProspectFormValues | null>(null);
   const [dimensions, setDimensions] = useState<DimState[]>(DIMENSION_TEMPLATE);
-  const [summaryStatus, setSummaryStatus] = useState<"idle" | "running" | "completed" | "failed">("idle");
-  const [summary, setSummary] = useState<string>("");
   const [isRunning, setIsRunning] = useState(false);
   const [globalError, setGlobalError] = useState<string | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [savedTick, setSavedTick] = useState(0); // bumps when we save → drawer re-reads
   const [justSaved, setJustSaved] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
   const [loadedFromSave, setLoadedFromSave] = useState(false);
+  const [userEmail, setUserEmail] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    try {
+      const sb = getBrowserSupabase();
+      sb.auth.getUser().then(({ data }) => {
+        if (!cancelled) setUserEmail(data.user?.email ?? null);
+      });
+    } catch {
+      // Supabase not configured in this environment — leave email null.
+    }
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const totalDone = useMemo(
     () => dimensions.filter((d) => d.status === "completed" || d.status === "failed").length,
@@ -77,8 +94,6 @@ export default function HomePage() {
     setProspect(values);
     setLoadedFromSave(false);
     setDimensions(DIMENSION_TEMPLATE.map((d) => ({ ...d, status: "pending" })));
-    setSummary("");
-    setSummaryStatus("idle");
     setGlobalError(null);
     setIsRunning(true);
     setJustSaved(false);
@@ -155,40 +170,51 @@ export default function HomePage() {
             : d,
         ),
       );
-    } else if (ev.type === "summary_started") {
-      setSummaryStatus("running");
-    } else if (ev.type === "summary_complete") {
-      setSummary(String(ev.summary || ""));
-      setSummaryStatus("completed");
     } else if (ev.type === "error") {
       setGlobalError(String(ev.message || "unknown error"));
-      setSummaryStatus((s) => (s === "running" ? "failed" : s));
     }
   }
 
-  const reportReady = summaryStatus === "completed" && totalDone === dimensions.length;
   const canSave = prospect !== null && totalDone === dimensions.length;
   const canDownload = canSave;
 
-  const handleSave = useCallback(() => {
-    if (!prospect) return;
-    saveReport({
-      prospect,
-      summary,
-      dimensions: dimensions.map((d) => ({
-        id: d.id,
-        label: d.label,
-        iconName: d.iconName,
-        status: d.status,
-        findings: d.findings,
-        durationMs: d.durationMs,
-        error: d.error,
-      })),
-    });
-    setSavedTick((t) => t + 1);
-    setJustSaved(true);
-    setTimeout(() => setJustSaved(false), 1800);
-  }, [prospect, summary, dimensions]);
+  const [saving, setSaving] = useState(false);
+  const handleSave = useCallback(async () => {
+    if (!prospect || saving) return;
+    setSaving(true);
+    setSaveError(null);
+    try {
+      await saveReport({
+        prospect,
+        summary: "",
+        dimensions: dimensions.map((d) => ({
+          id: d.id,
+          label: d.label,
+          iconName: d.iconName,
+          status: d.status,
+          findings: d.findings,
+          durationMs: d.durationMs,
+          error: d.error,
+        })),
+      });
+      setSavedTick((t) => t + 1);
+      setJustSaved(true);
+      setTimeout(() => setJustSaved(false), 1800);
+    } catch (err) {
+      setSaveError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSaving(false);
+    }
+  }, [prospect, dimensions, saving]);
+
+  const handleSignOut = useCallback(async () => {
+    try {
+      await fetch("/api/auth/logout", { method: "POST", credentials: "include" });
+    } catch {
+      /* ignore — we redirect anyway */
+    }
+    window.location.href = "/login";
+  }, []);
 
   const buildExportable = useCallback((): SavedReport | null => {
     if (!prospect) return null;
@@ -196,7 +222,7 @@ export default function HomePage() {
       id: "current",
       savedAt: new Date().toISOString(),
       prospect,
-      summary,
+      summary: "",
       dimensions: dimensions.map((d) => ({
         id: d.id,
         label: d.label,
@@ -207,7 +233,7 @@ export default function HomePage() {
         error: d.error,
       })),
     };
-  }, [prospect, summary, dimensions]);
+  }, [prospect, dimensions]);
 
   const handleDownloadMarkdown = useCallback(() => {
     const report = buildExportable();
@@ -251,8 +277,6 @@ export default function HomePage() {
         : tpl;
     });
     setDimensions(restored);
-    setSummary(r.summary);
-    setSummaryStatus(r.summary ? "completed" : "idle");
     setGlobalError(null);
     setLoadedFromSave(true);
     setJustSaved(false);
@@ -263,8 +287,6 @@ export default function HomePage() {
     abortRef.current?.abort();
     setProspect(null);
     setDimensions(DIMENSION_TEMPLATE.map((d) => ({ ...d, status: "pending" })));
-    setSummary("");
-    setSummaryStatus("idle");
     setGlobalError(null);
     setIsRunning(false);
     setLoadedFromSave(false);
@@ -276,8 +298,11 @@ export default function HomePage() {
       <Nav
         onReset={prospect ? reset : undefined}
         onSave={canSave ? handleSave : undefined}
+        saving={saving}
         justSaved={justSaved}
         onOpenDrawer={() => setDrawerOpen(true)}
+        userEmail={userEmail}
+        onSignOut={handleSignOut}
         downloadMenu={
           canDownload ? (
             <DownloadMenu
@@ -315,14 +340,15 @@ export default function HomePage() {
           </div>
         )}
 
+        {saveError && (
+          <div className="mt-6 rounded-xl border border-accent-red/40 bg-accent-redMuted/30 p-4 font-mono text-sm text-accent-red">
+            Save failed: {saveError}
+          </div>
+        )}
+
         {prospect && (
           <div className="mt-8 grid grid-cols-1 gap-6 lg:grid-cols-[1fr_280px] print:block print:gap-0">
             <div className="space-y-6">
-              <ExecutiveSummary
-                status={summaryStatus}
-                summary={summary}
-                prospect={{ companyName: prospect.companyName, websiteUrl: prospect.websiteUrl }}
-              />
               <div className="space-y-5">
                 {dimensions.map((d) => (
                   <DimensionCard
@@ -342,9 +368,14 @@ export default function HomePage() {
             <div className="order-first lg:order-last print:hidden">
               <ProgressRail
                 dimensions={dimensions.map((d) => ({ id: d.id, label: d.label, status: d.status }))}
-                summaryStatus={summaryStatus}
               />
             </div>
+          </div>
+        )}
+
+        {!prospect && (
+          <div className="mt-10 print:hidden">
+            <BulkOutreach />
           </div>
         )}
       </main>
@@ -359,12 +390,24 @@ export default function HomePage() {
 interface NavProps {
   onReset?: () => void;
   onSave?: () => void;
+  saving: boolean;
   justSaved: boolean;
   onOpenDrawer: () => void;
+  userEmail: string | null;
+  onSignOut: () => void;
   downloadMenu: React.ReactNode;
 }
 
-function Nav({ onReset, onSave, justSaved, onOpenDrawer, downloadMenu }: NavProps) {
+function Nav({
+  onReset,
+  onSave,
+  saving,
+  justSaved,
+  onOpenDrawer,
+  userEmail,
+  onSignOut,
+  downloadMenu,
+}: NavProps) {
   return (
     <nav className="sticky top-0 z-30 border-b border-edge-default bg-bg-primary/85 backdrop-blur print:hidden">
       <div className="mx-auto flex h-16 max-w-7xl items-center justify-between px-4 md:px-6">
@@ -394,16 +437,21 @@ function Nav({ onReset, onSave, justSaved, onOpenDrawer, downloadMenu }: NavProp
           {onSave && (
             <button
               onClick={onSave}
+              disabled={saving}
               className={`flex items-center gap-1.5 rounded-lg border px-3 py-2 font-mono text-xs uppercase tracking-wider transition ${
                 justSaved
                   ? "border-accent-emerald bg-accent-emerald/10 text-accent-emerald"
                   : "border-edge-default bg-bg-surface text-ink-primary hover:border-accent-cyan hover:text-accent-cyan"
-              }`}
-              title="Save this report to your browser"
+              } disabled:opacity-50`}
+              title="Save this report to your Zapsight account"
             >
               {justSaved ? (
                 <>
                   <Check size={14} /> Saved
+                </>
+              ) : saving ? (
+                <>
+                  <Save size={14} className="animate-pulse" /> Saving...
                 </>
               ) : (
                 <>
@@ -422,6 +470,24 @@ function Nav({ onReset, onSave, justSaved, onOpenDrawer, downloadMenu }: NavProp
             >
               <RefreshCw size={14} /> New
             </button>
+          )}
+
+          {userEmail && (
+            <div className="ml-1 hidden items-center gap-2 border-l border-edge-default pl-3 md:flex">
+              <div className="flex flex-col items-end leading-none">
+                <span className="font-mono text-[10px] uppercase tracking-wider text-ink-tertiary">
+                  signed in
+                </span>
+                <span className="font-mono text-xs text-ink-secondary">{userEmail}</span>
+              </div>
+              <button
+                onClick={onSignOut}
+                title="Sign out"
+                className="rounded-lg p-2 text-ink-secondary hover:bg-bg-elevated hover:text-accent-red"
+              >
+                <LogOut size={14} />
+              </button>
+            </div>
           )}
         </div>
       </div>

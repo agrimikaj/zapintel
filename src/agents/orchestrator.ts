@@ -1,28 +1,15 @@
 /**
  * Research orchestrator.
  *
- * Mirrors backend/agents/orchestrator.py from the Intelligence project, but
- * adapted to Next.js streaming + a single LLM call per dimension via
- * OpenRouter (no local web-scraper service — the prospect URL is given to
- * the model as the anchor, and the model uses its training/world knowledge
- * + URL inference to produce findings).
- *
  * Pipeline:
  *   1. validate input
  *   2. dispatch all 8 dimension agents in parallel (one OpenRouter call each)
  *   3. as each one completes, emit a `dimension_complete` SSE event
- *   4. once all dimensions are in, run the synthesis pass to produce the
- *      Executive Summary, and emit a `summary_complete` event
- *   5. emit a final `report_complete` event with the full assembled report
+ *   4. emit a final `report_complete` event with the full assembled report
  */
 
 import { z } from "zod";
-import {
-  DIMENSIONS,
-  Dimension,
-  ProspectInput,
-  SUMMARY_SYSTEM_PROMPT,
-} from "./dimensions";
+import { DIMENSIONS, Dimension, ProspectInput } from "./dimensions";
 import { completeChat } from "./openrouter";
 
 export const ProspectInputSchema = z.object({
@@ -49,9 +36,7 @@ export type SSEEvent =
   | { type: "research_started"; total: number; prospect: ProspectInput }
   | { type: "dimension_started"; dimension: Dimension["id"]; label: string }
   | { type: "dimension_complete"; dimension: Dimension["id"]; result: DimensionResult }
-  | { type: "summary_started" }
-  | { type: "summary_complete"; summary: string }
-  | { type: "report_complete"; report: { summary: string; dimensions: DimensionResult[] } }
+  | { type: "report_complete"; report: { dimensions: DimensionResult[] } }
   | { type: "error"; message: string };
 
 async function runDimension(
@@ -99,35 +84,6 @@ async function runDimension(
   }
 }
 
-async function runSummary(
-  input: ProspectInput,
-  dimResults: DimensionResult[],
-): Promise<string> {
-  const dimensionsBlock = dimResults
-    .map(
-      (r) => `### ${r.label} (status=${r.status})\n${r.findings || `_error: ${r.error}_`}`,
-    )
-    .join("\n\n---\n\n");
-
-  const userPrompt = `Prospect: **${input.companyName}** (${input.websiteUrl})${
-    input.industry ? ` — ${input.industry}` : ""
-  }
-${input.knownContext ? `\nContext the AE provided:\n${input.knownContext}\n` : ""}
-${input.zapsightOffering ? `\nZapsight offering bias: ${input.zapsightOffering}\n` : ""}
-
-Below are the 8 dimension briefs. Synthesize them into the Executive Summary as specified.
-
-${dimensionsBlock}`;
-
-  return completeChat(
-    [
-      { role: "system", content: SUMMARY_SYSTEM_PROMPT },
-      { role: "user", content: userPrompt },
-    ],
-    { maxTokens: 1800, temperature: 0.35 },
-  );
-}
-
 /**
  * Run the full pipeline as an async generator of SSE-shaped events.
  * The caller (the API route) serializes each event to text/event-stream.
@@ -157,23 +113,10 @@ export async function* researchProspect(
     yield { type: "dimension_complete", dimension: winner.id, result: winner.result };
   }
 
-  // Restore canonical order for the synthesis pass (Promise.race order is
-  // wall-clock; the summary should always read them in dimension order).
   const ordered = DIMENSIONS.map((d) => completed.find((r) => r.dimension === d.id)!);
-
-  yield { type: "summary_started" };
-  let summary = "";
-  try {
-    summary = await runSummary(input, ordered);
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    yield { type: "error", message: `Summary failed: ${message}` };
-    summary = `_Executive Summary failed to generate: ${message}_`;
-  }
-  yield { type: "summary_complete", summary };
 
   yield {
     type: "report_complete",
-    report: { summary, dimensions: ordered },
+    report: { dimensions: ordered },
   };
 }

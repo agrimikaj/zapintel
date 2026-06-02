@@ -1,13 +1,13 @@
 /**
- * Browser-local storage for saved ZapIntel reports.
+ * Server-backed report storage.
  *
- * No server backend — reports live in localStorage under a single
- * versioned key, keyed by a generated report id. Sufficient for the
- * single-user / single-machine workflow Sarah described
- * ("skip login and other addons").
+ * Previously this module used browser localStorage. Now it talks to
+ * /api/reports, which is backed by Supabase Postgres with RLS so each
+ * authenticated user only sees their own rows.
  *
- * If the same machine generates ~hundreds of reports we'd hit the
- * ~5MB localStorage cap; that's a future problem worth a real DB.
+ * The DB row shape uses snake_case columns (company_name, website_url,
+ * ...); we translate to the camelCase shape the rest of the UI uses on
+ * the way in and out, so nothing else in the codebase has to change.
  */
 
 export interface SavedReportDimension {
@@ -22,7 +22,7 @@ export interface SavedReportDimension {
 
 export interface SavedReport {
   id: string;
-  savedAt: string; // ISO timestamp
+  savedAt: string; // ISO timestamp (created_at from DB)
   prospect: {
     companyName: string;
     websiteUrl: string;
@@ -30,59 +30,79 @@ export interface SavedReport {
     knownContext?: string;
     zapsightOffering?: string;
   };
+  /** Legacy field kept for compatibility with existing saved rows. New reports save "". */
   summary: string;
   dimensions: SavedReportDimension[];
 }
 
-const KEY = "zapintel.reports.v1";
-
-function readAll(): SavedReport[] {
-  if (typeof window === "undefined") return [];
-  try {
-    const raw = window.localStorage.getItem(KEY);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw) as SavedReport[];
-    return Array.isArray(parsed) ? parsed : [];
-  } catch {
-    return [];
-  }
+interface DbReport {
+  id: string;
+  created_at: string;
+  company_name: string;
+  website_url: string;
+  industry: string | null;
+  known_context: string | null;
+  zapsight_offer: string | null;
+  summary: string | null;
+  dimensions: SavedReportDimension[];
 }
 
-function writeAll(reports: SavedReport[]): void {
-  if (typeof window === "undefined") return;
-  window.localStorage.setItem(KEY, JSON.stringify(reports));
-}
-
-export function listSavedReports(): SavedReport[] {
-  return readAll().sort((a, b) => (a.savedAt < b.savedAt ? 1 : -1));
-}
-
-export function getSavedReport(id: string): SavedReport | undefined {
-  return readAll().find((r) => r.id === id);
-}
-
-export function saveReport(report: Omit<SavedReport, "id" | "savedAt">): SavedReport {
-  const id =
-    typeof crypto !== "undefined" && "randomUUID" in crypto
-      ? crypto.randomUUID()
-      : `rpt_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
-  const full: SavedReport = {
-    ...report,
-    id,
-    savedAt: new Date().toISOString(),
+function fromDb(row: DbReport): SavedReport {
+  return {
+    id: row.id,
+    savedAt: row.created_at,
+    prospect: {
+      companyName: row.company_name,
+      websiteUrl: row.website_url,
+      industry: row.industry ?? undefined,
+      knownContext: row.known_context ?? undefined,
+      zapsightOffering: row.zapsight_offer ?? undefined,
+    },
+    summary: row.summary ?? "",
+    dimensions: Array.isArray(row.dimensions) ? row.dimensions : [],
   };
-  const all = readAll();
-  all.push(full);
-  writeAll(all);
-  return full;
 }
 
-export function deleteSavedReport(id: string): void {
-  writeAll(readAll().filter((r) => r.id !== id));
+async function readJson<T>(res: Response): Promise<T> {
+  const text = await res.text();
+  if (!res.ok) {
+    let detail = `HTTP ${res.status}`;
+    try {
+      const j = JSON.parse(text);
+      detail = j?.error?.message || detail;
+    } catch {
+      /* not json */
+    }
+    throw new Error(detail);
+  }
+  return JSON.parse(text) as T;
 }
 
-export function clearAllSavedReports(): void {
-  writeAll([]);
+export async function listSavedReports(): Promise<SavedReport[]> {
+  const res = await fetch("/api/reports", { credentials: "include" });
+  const { data } = await readJson<{ data: DbReport[] }>(res);
+  return data.map(fromDb);
+}
+
+export async function saveReport(
+  report: Omit<SavedReport, "id" | "savedAt">,
+): Promise<SavedReport> {
+  const res = await fetch("/api/reports", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    credentials: "include",
+    body: JSON.stringify(report),
+  });
+  const { data } = await readJson<{ data: DbReport }>(res);
+  return fromDb(data);
+}
+
+export async function deleteSavedReport(id: string): Promise<void> {
+  const res = await fetch(`/api/reports/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+    credentials: "include",
+  });
+  await readJson<{ ok: true }>(res);
 }
 
 export function slugify(s: string): string {
@@ -105,12 +125,6 @@ export function exportReportAsMarkdown(report: SavedReport): string {
   lines.push("");
   lines.push("---");
   lines.push("");
-  if (report.summary) {
-    lines.push(report.summary);
-    lines.push("");
-    lines.push("---");
-    lines.push("");
-  }
   for (const d of report.dimensions) {
     lines.push(`## ${d.label}`);
     if (d.status !== "completed") lines.push(`_status: ${d.status}_`);

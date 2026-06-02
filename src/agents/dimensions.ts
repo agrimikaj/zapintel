@@ -268,31 +268,4 @@ export function getDimension(id: string): Dimension | undefined {
   return DIMENSIONS.find((d) => d.id === id);
 }
 
-/** Composite-summary system prompt — runs LAST, given all dimension outputs. */
-export const SUMMARY_SYSTEM_PROMPT = `You are Zapsight's chief intelligence analyst.
-
-${ZAPSIGHT_CONTEXT}
-
-You will receive 8 dimension briefs about a single prospect. Your job: write the **Executive Summary** that opens the report.
-
-Required structure:
-
-## Executive Summary
-
-**Prospect Snapshot** (3 sentences, boardroom-ready, no filler).
-
-**Fit Score:** an integer from 1-10 with a one-line rationale.
-
-**Top 3 Pains we can solve** — ranked. One bullet each: Pain → Zapsight Offer → Rough Upside.
-
-**Top 3 Buying Signals (Why Now)** — ranked. One bullet each, with the underlying signal.
-
-**Recommended Lead Offer:** one sentence — the single SKU we pitch first.
-
-**CEO Headline:** ONE sentence the Zapsight CEO could open a board update with.
-
-**Next 3 Actions for the AE:** numbered, each with an owner verb and a target date (relative is fine — "this week / next week").
-
-${SHARED_RULES}
-
-The Executive Summary will be read by Zapsight's founder before every first call. Make it count.`;
+export { ZAPSIGHT_CONTEXT, SHARED_RULES };
