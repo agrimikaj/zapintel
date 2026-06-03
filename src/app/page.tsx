@@ -5,9 +5,12 @@ import {
   Activity,
   Check,
   FolderOpen,
+  KeyRound,
+  Loader2,
   LogOut,
   RefreshCw,
   Save,
+  X,
   Zap,
 } from "lucide-react";
 import { ProspectForm, ProspectFormValues } from "@/components/ProspectForm";
@@ -68,6 +71,7 @@ export default function HomePage() {
   const [saveError, setSaveError] = useState<string | null>(null);
   const [loadedFromSave, setLoadedFromSave] = useState(false);
   const [userEmail, setUserEmail] = useState<string | null>(null);
+  const [setPasswordOpen, setSetPasswordOpen] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
@@ -301,6 +305,7 @@ export default function HomePage() {
         saving={saving}
         justSaved={justSaved}
         onOpenDrawer={() => setDrawerOpen(true)}
+        onOpenSetPassword={() => setSetPasswordOpen(true)}
         userEmail={userEmail}
         onSignOut={handleSignOut}
         downloadMenu={
@@ -319,6 +324,12 @@ export default function HomePage() {
         onClose={() => setDrawerOpen(false)}
         onOpenReport={handleOpenSaved}
         refreshKey={savedTick}
+      />
+
+      <SetPasswordModal
+        open={setPasswordOpen}
+        email={userEmail}
+        onClose={() => setSetPasswordOpen(false)}
       />
 
       <main className="mx-auto max-w-7xl px-4 py-8 md:px-6 md:py-12 print:px-0 print:py-0">
@@ -393,6 +404,7 @@ interface NavProps {
   saving: boolean;
   justSaved: boolean;
   onOpenDrawer: () => void;
+  onOpenSetPassword: () => void;
   userEmail: string | null;
   onSignOut: () => void;
   downloadMenu: React.ReactNode;
@@ -404,6 +416,7 @@ function Nav({
   saving,
   justSaved,
   onOpenDrawer,
+  onOpenSetPassword,
   userEmail,
   onSignOut,
   downloadMenu,
@@ -481,6 +494,13 @@ function Nav({
                 <span className="font-mono text-xs text-ink-secondary">{userEmail}</span>
               </div>
               <button
+                onClick={onOpenSetPassword}
+                title="Set or change your password"
+                className="rounded-lg p-2 text-ink-secondary hover:bg-bg-elevated hover:text-accent-cyan"
+              >
+                <KeyRound size={14} />
+              </button>
+              <button
                 onClick={onSignOut}
                 title="Sign out"
                 className="rounded-lg p-2 text-ink-secondary hover:bg-bg-elevated hover:text-accent-red"
@@ -492,6 +512,162 @@ function Nav({
         </div>
       </div>
     </nav>
+  );
+}
+
+interface SetPasswordModalProps {
+  open: boolean;
+  email: string | null;
+  onClose: () => void;
+}
+
+function SetPasswordModal({ open, email, onClose }: SetPasswordModalProps) {
+  const [password, setPassword] = useState("");
+  const [confirm, setConfirm] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [done, setDone] = useState(false);
+
+  // Reset state every time the modal opens.
+  useEffect(() => {
+    if (open) {
+      setPassword("");
+      setConfirm("");
+      setErrorMsg(null);
+      setDone(false);
+      setSubmitting(false);
+    }
+  }, [open]);
+
+  if (!open) return null;
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    if (submitting) return;
+    if (password.length < 8) {
+      setErrorMsg("Password must be at least 8 characters.");
+      return;
+    }
+    if (password !== confirm) {
+      setErrorMsg("Passwords don't match.");
+      return;
+    }
+    setSubmitting(true);
+    setErrorMsg(null);
+    try {
+      const res = await fetch("/api/auth/set-password", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ password }),
+      });
+      if (!res.ok) {
+        const j = await res.json().catch(() => null);
+        throw new Error(j?.error?.message || `HTTP ${res.status}`);
+      }
+      setDone(true);
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm px-4 print:hidden"
+      onClick={onClose}
+    >
+      <div
+        className="w-full max-w-md rounded-2xl border border-edge-default bg-bg-surface p-6 shadow-2xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="mb-4 flex items-start justify-between">
+          <div>
+            <h3 className="flex items-center gap-2 text-lg font-bold text-ink-primary">
+              <KeyRound size={16} className="text-accent-cyan" /> Set password
+            </h3>
+            <p className="mt-0.5 font-mono text-[11px] text-ink-tertiary">
+              {email ? `for ${email}` : "for your account"} · used for the next sign-in
+            </p>
+          </div>
+          <button
+            onClick={onClose}
+            className="rounded-lg p-1.5 text-ink-secondary hover:bg-bg-elevated hover:text-accent-red"
+            aria-label="Close"
+          >
+            <X size={16} />
+          </button>
+        </div>
+
+        {done ? (
+          <div className="rounded-xl border border-accent-emerald/40 bg-accent-emerald/10 p-4 text-sm">
+            <div className="mb-1 flex items-center gap-2 font-bold text-accent-emerald">
+              <Check size={16} /> Password updated
+            </div>
+            <p className="text-ink-secondary">
+              You can now sign in with your email + password on the login page.
+            </p>
+            <button
+              onClick={onClose}
+              className="mt-3 font-mono text-xs uppercase tracking-wider text-accent-cyan hover:text-accent-emerald"
+            >
+              Close →
+            </button>
+          </div>
+        ) : (
+          <form onSubmit={handleSubmit} className="space-y-3">
+            <div>
+              <label className="font-mono text-section uppercase tracking-wider text-ink-secondary">
+                New password
+              </label>
+              <input
+                required
+                autoFocus
+                type="password"
+                autoComplete="new-password"
+                disabled={submitting}
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder="at least 8 characters"
+                minLength={8}
+                className="mt-2 w-full rounded-lg border border-edge-default bg-bg-input px-3 py-2.5 text-ink-primary outline-none focus:border-accent-cyan disabled:opacity-50"
+              />
+            </div>
+            <div>
+              <label className="font-mono text-section uppercase tracking-wider text-ink-secondary">
+                Confirm password
+              </label>
+              <input
+                required
+                type="password"
+                autoComplete="new-password"
+                disabled={submitting}
+                value={confirm}
+                onChange={(e) => setConfirm(e.target.value)}
+                minLength={8}
+                className="mt-2 w-full rounded-lg border border-edge-default bg-bg-input px-3 py-2.5 text-ink-primary outline-none focus:border-accent-cyan disabled:opacity-50"
+              />
+            </div>
+
+            {errorMsg && (
+              <div className="rounded-lg border border-accent-red/40 bg-accent-redMuted/30 p-2.5 font-mono text-xs text-accent-red">
+                {errorMsg}
+              </div>
+            )}
+
+            <button
+              type="submit"
+              disabled={submitting || !password || !confirm}
+              className="flex w-full items-center justify-center gap-2 rounded-lg bg-accent-cyan py-2.5 font-bold text-bg-primary transition hover:bg-accent-emerald disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              {submitting ? <Loader2 size={16} className="animate-spin" /> : <KeyRound size={16} />}
+              {submitting ? "Saving..." : "Set password"}
+            </button>
+          </form>
+        )}
+      </div>
+    </div>
   );
 }
 
