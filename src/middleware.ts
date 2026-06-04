@@ -1,29 +1,32 @@
 /**
- * Auth middleware.
+ * Auth middleware — fail-closed gate.
  *
- * Runs on every request. Refreshes the Supabase session cookie if needed
- * and gates protected paths behind a valid session.
+ * Modes (checked in order):
+ *
+ *   1. SIMPLE AUTH — enabled when `APP_PASSWORD` is set on the server.
+ *      Verifies an HMAC-signed `zapintel_session` cookie on every
+ *      request. This is the path currently used on zapintel.vercel.app.
+ *
+ *   2. SUPABASE AUTH — enabled when the Supabase env vars are set AND
+ *      `APP_PASSWORD` is unset. Requires a valid Supabase session whose
+ *      email is on WHITELIST_EMAILS.
+ *
+ *   3. FAIL CLOSED — if neither mode is configured, the app refuses to
+ *      serve protected paths. We do NOT silently let everyone in (the
+ *      previous behavior). API requests get 503; page requests redirect
+ *      to /login with a reason.
  *
  * Public paths (no auth required):
- *   - /login                 — login page
- *   - /auth/callback         — magic-link redirect target
- *   - /api/auth/*            — magic-link request, logout
- *   - /_next/*, /favicon.ico — Next.js plumbing
- *
- * Everything else (including /, /api/research, /api/export, /api/reports)
- * requires an authenticated session. /api/* responses return 401 JSON;
- * page requests redirect to /login.
- *
- * Allowlist enforcement: we don't *send* magic links to non-whitelisted
- * emails (see /api/auth/magic-link), and on every request we re-check
- * that the session's email is still in WHITELIST_EMAILS. Removing an
- * email from the env var revokes their access on the next request.
+ *   - /login                  — login page
+ *   - /auth/callback          — Supabase magic-link redirect target
+ *   - /api/auth/login         — simple-auth password submit
+ *   - /api/auth/logout        — clears whatever session exists
+ *   - /api/auth/magic-link    — Supabase magic-link request
+ *   - /_next/*, /favicon.ico  — Next.js plumbing
  */
 
 import { NextRequest, NextResponse } from "next/server";
-import { createServerClient, type CookieOptions } from "@supabase/ssr";
-
-type CookieMutation = { name: string; value: string; options?: CookieOptions };
+import { SESSION_COOKIE, verifySessionToken } from "@/lib/simpleAuth";
 
 const PUBLIC_PATHS = new Set(["/login", "/auth/callback"]);
 const PUBLIC_PREFIXES = ["/api/auth/", "/_next/", "/favicon"];
@@ -33,33 +36,56 @@ function isPublicPath(pathname: string): boolean {
   return PUBLIC_PREFIXES.some((p) => pathname.startsWith(p));
 }
 
-function isWhitelisted(email: string | undefined | null): boolean {
-  if (!email) return false;
-  const raw = process.env.WHITELIST_EMAILS || "";
-  const allowed = new Set(
-    raw.split(",").map((e) => e.trim().toLowerCase()).filter(Boolean),
-  );
-  if (allowed.size === 0) return false;
-  return allowed.has(email.trim().toLowerCase());
+function isApiPath(pathname: string): boolean {
+  return pathname.startsWith("/api/");
 }
 
-export async function middleware(req: NextRequest) {
-  const { pathname } = req.nextUrl;
+function loginRedirect(req: NextRequest, reason?: string): NextResponse {
+  const loginUrl = new URL("/login", req.url);
+  if (req.nextUrl.pathname !== "/") {
+    loginUrl.searchParams.set("next", req.nextUrl.pathname);
+  }
+  if (reason) loginUrl.searchParams.set("reason", reason);
+  return NextResponse.redirect(loginUrl);
+}
 
-  // Skip plumbing.
-  if (isPublicPath(pathname)) return NextResponse.next();
+function unauthorizedJson(message: string): NextResponse {
+  return NextResponse.json(
+    { error: { code: "UNAUTHORIZED", message } },
+    { status: 401 },
+  );
+}
 
-  // If Supabase isn't configured yet, let everything through so the app
-  // still boots and the user can see the setup banner. We fail-open on
-  // missing config (not on missing session) to keep the dev/setup loop
-  // tolerable. Production prod has the env vars set, so this branch is
-  // never hit there.
+function noAuthConfiguredResponse(req: NextRequest): NextResponse {
+  if (isApiPath(req.nextUrl.pathname)) {
+    return NextResponse.json(
+      {
+        error: {
+          code: "NO_AUTH_CONFIGURED",
+          message:
+            "No authentication mechanism is configured on this deployment.",
+        },
+      },
+      { status: 503 },
+    );
+  }
+  return loginRedirect(req, "no_auth_configured");
+}
+
+async function checkSupabase(req: NextRequest): Promise<NextResponse | null> {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const anon = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-  if (!url || !anon) return NextResponse.next();
+  if (!url || !anon) return null;
+
+  // Lazy import so deployments without Supabase don't pay the cost.
+  const { createServerClient } = await import("@supabase/ssr");
+  type CookieMutation = {
+    name: string;
+    value: string;
+    options?: Record<string, unknown>;
+  };
 
   const res = NextResponse.next();
-
   const supabase = createServerClient(url, anon, {
     cookies: {
       getAll: () => req.cookies.getAll(),
@@ -74,32 +100,47 @@ export async function middleware(req: NextRequest) {
   const {
     data: { user },
   } = await supabase.auth.getUser();
-
-  if (!user || !isWhitelisted(user.email)) {
-    if (pathname.startsWith("/api/")) {
-      return NextResponse.json(
-        {
-          error: {
-            code: "UNAUTHORIZED",
-            message: user ? "Email not whitelisted." : "No session.",
-          },
-        },
-        { status: 401 },
-      );
-    }
-    const loginUrl = new URL("/login", req.url);
-    if (pathname !== "/") loginUrl.searchParams.set("next", pathname);
-    if (user && !isWhitelisted(user.email)) {
-      loginUrl.searchParams.set("reason", "not_allowed");
-    }
-    return NextResponse.redirect(loginUrl);
+  if (!user) {
+    return isApiPath(req.nextUrl.pathname)
+      ? unauthorizedJson("No session.")
+      : loginRedirect(req);
   }
 
+  const wlRaw = process.env.WHITELIST_EMAILS || "";
+  const wl = new Set(
+    wlRaw.split(",").map((e) => e.trim().toLowerCase()).filter(Boolean),
+  );
+  if (wl.size > 0 && (!user.email || !wl.has(user.email.toLowerCase()))) {
+    return isApiPath(req.nextUrl.pathname)
+      ? unauthorizedJson("Email not whitelisted.")
+      : loginRedirect(req, "not_allowed");
+  }
   return res;
 }
 
+export async function middleware(req: NextRequest) {
+  const { pathname } = req.nextUrl;
+  if (isPublicPath(pathname)) return NextResponse.next();
+
+  const simpleEnabled = Boolean(process.env.APP_PASSWORD);
+
+  if (simpleEnabled) {
+    const token = req.cookies.get(SESSION_COOKIE)?.value;
+    if (token && (await verifySessionToken(token))) {
+      return NextResponse.next();
+    }
+    return isApiPath(pathname)
+      ? unauthorizedJson("Invalid or expired session.")
+      : loginRedirect(req);
+  }
+
+  const supabaseResult = await checkSupabase(req);
+  if (supabaseResult !== null) return supabaseResult;
+
+  // Neither auth mode configured — fail closed.
+  return noAuthConfiguredResponse(req);
+}
+
 export const config = {
-  // Match everything except static assets — middleware itself decides
-  // what's public vs protected via isPublicPath().
   matcher: ["/((?!_next/static|_next/image|favicon.ico|.*\\.svg$).*)"],
 };
