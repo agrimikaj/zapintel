@@ -83,6 +83,12 @@ function sanitize(s: string): string {
     .replace(/[​-‍⁠﻿]/g, "")
     .replace(/./gu, (ch) => {
       const cp = ch.codePointAt(0) ?? 63;
+      // C1 control range (U+0080-U+009F): NOT WinAnsi-encodable. The byte
+      // slots 0x80-0x9F encode printable glyphs via their true Unicode
+      // codepoints (€=U+20AC, smart quotes, etc.), not these raw controls,
+      // so passing them through throws. They're almost always mojibake from
+      // a CSV/XLSX export — drop them.
+      if (cp >= 0x80 && cp <= 0x9f) return "";
       if (cp <= 0xff) return ch;
       if (WINANSI_EXTRAS.has(cp)) return ch;
       return "?";
