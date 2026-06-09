@@ -53,6 +53,11 @@ export interface SummaryMeta {
  * outside that throws at render time, so we whitelist the WinAnsi
  * codepoints and map the common LLM offenders (≠ ≤ ≥ → •) to ASCII before
  * the catch-all replaces remaining strays with "?".
+ *
+ * EVERY string drawn to the page MUST pass through here first — including the
+ * header (source filename, generated-at date). `toLocaleString` on Chrome
+ * 110+/Node 19+ emits a narrow no-break space (U+202F) before AM/PM, which
+ * is not encodable and otherwise throws mid-render.
  */
 const WINANSI_EXTRAS = new Set([
   0x20ac, 0x201a, 0x0192, 0x201e, 0x2026, 0x2020, 0x2021, 0x02c6, 0x2030,
@@ -70,6 +75,12 @@ function sanitize(s: string): string {
     .replace(/[↔⇔]/g, "<->")
     .replace(/[↑-⇿]/g, "->")
     .replace(/[∀-⋿]/g, "?")
+    // Unicode spaces > 0xFF that WinAnsi can't encode -> ASCII space. Notably
+    // U+202F (narrow no-break space), which Chrome 110+/Node 19+ toLocaleString
+    // inserts before AM/PM; left unmapped it throws at draw time.
+    .replace(/[ -   　]/g, " ")
+    // Zero-width / joiner / BOM characters -> drop entirely.
+    .replace(/[​-‍⁠﻿]/g, "")
     .replace(/./gu, (ch) => {
       const cp = ch.codePointAt(0) ?? 63;
       if (cp <= 0xff) return ch;
@@ -200,7 +211,7 @@ function drawHeader(
   pageNumber: number,
 ): void {
   const { page } = ctx;
-  page.drawText("Zapsight — Bulk Outreach Summary", {
+  page.drawText(sanitize("Zapsight — Bulk Outreach Summary"), {
     x: MARGIN_X,
     y: PAGE_H - 36,
     size: 16,
@@ -215,9 +226,11 @@ function drawHeader(
   if ((dtc.up_org_referral ?? 0) > 0) docTypeBits.push(`${dtc.up_org_referral} up-org-ref`);
   if ((dtc.skip ?? 0) > 0) docTypeBits.push(`${dtc.skip} skip`);
   const docTypeSuffix = docTypeBits.length > 0 ? ` · routed: ${docTypeBits.join(", ")}` : "";
-  const sub = `${meta.totalLeads} leads · ${meta.acceptedCount} accepted · ${meta.rejectedCount} rejected${
-    meta.failedCount > 0 ? ` · ${meta.failedCount} failed` : ""
-  }${docTypeSuffix}`;
+  const sub = sanitize(
+    `${meta.totalLeads} leads · ${meta.acceptedCount} accepted · ${meta.rejectedCount} rejected${
+      meta.failedCount > 0 ? ` · ${meta.failedCount} failed` : ""
+    }${docTypeSuffix}`,
+  );
   page.drawText(sub, {
     x: MARGIN_X,
     y: PAGE_H - 52,
@@ -226,8 +239,9 @@ function drawHeader(
     color: rgb(0.3, 0.3, 0.36),
   });
 
-  // Right-side metadata.
-  const gen = `Generated: ${new Date(meta.generatedAtISO).toLocaleString()}`;
+  // Right-side metadata. Sanitize BEFORE measuring width so right-alignment
+  // matches what's actually drawn.
+  const gen = sanitize(`Generated: ${new Date(meta.generatedAtISO).toLocaleString()}`);
   const genW = font.widthOfTextAtSize(gen, 9);
   page.drawText(gen, {
     x: PAGE_W - MARGIN_X - genW,
@@ -236,7 +250,7 @@ function drawHeader(
     font,
     color: rgb(0.3, 0.3, 0.36),
   });
-  const src = `Source: ${meta.sourceLabel}`;
+  const src = sanitize(`Source: ${meta.sourceLabel}`);
   const srcW = font.widthOfTextAtSize(src, 9);
   page.drawText(src, {
     x: PAGE_W - MARGIN_X - srcW,
@@ -257,7 +271,7 @@ function drawHeader(
     borderColor: rgb(0.55, 0.75, 0.95),
     borderWidth: 0.6,
   });
-  page.drawText("All reasons mentioned in individual documents — see <slug>/intel.md for the full brief per lead.", {
+  page.drawText(sanitize("All reasons mentioned in individual documents — see <slug>/intel.md for the full brief per lead."), {
     x: MARGIN_X + 8,
     y: ctx.y + 1,
     size: 9,

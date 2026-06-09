@@ -232,6 +232,7 @@ export function BulkOutreach() {
   const [showSessions, setShowSessions] = useState(false);
   const [sessions, setSessions] = useState<BulkRunSummary[]>([]);
   const [storageWarning, setStorageWarning] = useState<string | null>(null);
+  const [downloadError, setDownloadError] = useState<string | null>(null);
   const [lastSavedAt, setLastSavedAt] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -492,8 +493,7 @@ export function BulkOutreach() {
     );
   }, []);
 
-  const downloadZip = useCallback(async () => {
-    if (!anyCompleted) return;
+  const buildAndDownloadZip = useCallback(async () => {
     const zip = new JSZip();
 
     const completed = rows.filter((r) => r.status === "completed");
@@ -604,6 +604,20 @@ export function BulkOutreach() {
     downloadBlob(blob, `zapsight-outreach-${stamp}.zip`);
   }, [rows, anyCompleted, filename]);
 
+  const downloadZip = useCallback(async () => {
+    if (!anyCompleted) return;
+    setDownloadError(null);
+    try {
+      await buildAndDownloadZip();
+    } catch (err) {
+      // Never let the download die silently — surface it so the run isn't lost.
+      const msg = err instanceof Error ? err.message : String(err);
+      setDownloadError(
+        `Download failed while building the ZIP/PDF: ${msg}. Your results are safe — use "Export JSON" as a fallback.`,
+      );
+    }
+  }, [anyCompleted, buildAndDownloadZip]);
+
   return (
     <section
       className="rounded-2xl border border-edge-default bg-bg-surface p-6 shadow-2xl shadow-black/40"
@@ -672,6 +686,21 @@ export function BulkOutreach() {
               className="mt-1.5 inline-flex items-center gap-1.5 rounded-md border border-accent-amber/40 bg-accent-amber/10 px-2 py-1 text-[11px] hover:bg-accent-amber/20"
             >
               <Download size={11} /> Export JSON now
+            </button>
+          </div>
+        </div>
+      )}
+
+      {downloadError && (
+        <div className="mt-4 flex items-start gap-2 rounded-xl border border-accent-red/40 bg-accent-redMuted/30 p-3 font-mono text-xs text-accent-red">
+          <AlertTriangle size={14} className="mt-0.5 shrink-0" />
+          <div className="flex-1">
+            <div>{downloadError}</div>
+            <button
+              onClick={exportCurrentJson}
+              className="mt-1.5 inline-flex items-center gap-1.5 rounded-md border border-accent-red/40 bg-accent-redMuted/30 px-2 py-1 text-[11px] hover:bg-accent-redMuted/50"
+            >
+              <Download size={11} /> Export JSON instead
             </button>
           </div>
         </div>
