@@ -128,7 +128,7 @@ export function SavedReportsDrawer({ open, onClose, onOpenReport, refreshKey }: 
               </div>
               <p className="mt-2 text-sm text-ink-secondary">
                 Generate a report, then hit <span className="text-accent-cyan">Save</span> to keep
-                it. Reports sync to your Zapsight account.
+                it. Reports are stored in this browser.
               </p>
             </div>
           )}

@@ -1,14 +1,32 @@
 /**
- * Server-backed report storage.
+ * Saved-report storage (localStorage).
  *
- * Previously this module used browser localStorage. Now it talks to
- * /api/reports, which is backed by Supabase Postgres with RLS so each
- * authenticated user only sees their own rows.
+ * History / why this is localStorage again:
+ *   v1 (993f42b) stored reports in browser localStorage and worked fine.
+ *   v2 (aeaa8bd) migrated this module to a Supabase-backed /api/reports
+ *   endpoint guarded by per-user RLS. But Supabase was never provisioned
+ *   for this deployment — zapintel.vercel.app is gated by the simple
+ *   shared-password flow (APP_PASSWORD), which has no Supabase session and
+ *   no Supabase env vars (see src/lib/simpleAuth.ts). So every save hit
+ *   getServerSupabase() → requireEnv() throw → HTTP 500, or (with env set)
+ *   supabase.auth.getUser() → null → HTTP 401. Reports never saved.
  *
- * The DB row shape uses snake_case columns (company_name, website_url,
- * ...); we translate to the camelCase shape the rest of the UI uses on
- * the way in and out, so nothing else in the codebase has to change.
+ *   Under shared-password auth there is no per-user identity to scope rows
+ *   to anyway, so server-side per-user storage buys nothing here. We return
+ *   to localStorage — same model the bulk-run persistence already uses
+ *   (see src/lib/bulkPersistence.ts) — which works with zero backend
+ *   config. Trade-off: reports live in the browser that created them and
+ *   don't sync across devices. Acceptable for a team-of-three internal
+ *   tool; revisit if/when Supabase is actually wired up.
+ *
+ * The public API (listSavedReports / saveReport / deleteSavedReport) stays
+ * async so callers (page.tsx, SavedReportsDrawer.tsx) need no changes.
  */
+
+const STORAGE_KEY = "zapintel.reports.v1";
+const SCHEMA_VERSION = 1;
+/** Cap stored reports to stay comfortably under the ~5MB per-origin quota. */
+const MAX_REPORTS = 50;
 
 export interface SavedReportDimension {
   id: string;
@@ -22,7 +40,7 @@ export interface SavedReportDimension {
 
 export interface SavedReport {
   id: string;
-  savedAt: string; // ISO timestamp (created_at from DB)
+  savedAt: string; // ISO timestamp
   prospect: {
     companyName: string;
     websiteUrl: string;
@@ -35,74 +53,123 @@ export interface SavedReport {
   dimensions: SavedReportDimension[];
 }
 
-interface DbReport {
-  id: string;
-  created_at: string;
-  company_name: string;
-  website_url: string;
-  industry: string | null;
-  known_context: string | null;
-  zapsight_offer: string | null;
-  summary: string | null;
-  dimensions: SavedReportDimension[];
+interface StorageEnvelope {
+  schemaVersion: number;
+  reports: SavedReport[];
 }
 
-function fromDb(row: DbReport): SavedReport {
-  return {
-    id: row.id,
-    savedAt: row.created_at,
-    prospect: {
-      companyName: row.company_name,
-      websiteUrl: row.website_url,
-      industry: row.industry ?? undefined,
-      knownContext: row.known_context ?? undefined,
-      zapsightOffering: row.zapsight_offer ?? undefined,
-    },
-    summary: row.summary ?? "",
-    dimensions: Array.isArray(row.dimensions) ? row.dimensions : [],
-  };
-}
-
-async function readJson<T>(res: Response): Promise<T> {
-  const text = await res.text();
-  if (!res.ok) {
-    let detail = `HTTP ${res.status}`;
-    try {
-      const j = JSON.parse(text);
-      detail = j?.error?.message || detail;
-    } catch {
-      /* not json */
-    }
-    throw new Error(detail);
+function isStorageAvailable(): boolean {
+  try {
+    if (typeof window === "undefined") return false;
+    const testKey = "__zapintel_reports_test__";
+    window.localStorage.setItem(testKey, "1");
+    window.localStorage.removeItem(testKey);
+    return true;
+  } catch {
+    return false;
   }
-  return JSON.parse(text) as T;
 }
 
+/** Reasonably unique id without depending on crypto.randomUUID everywhere. */
+function newId(): string {
+  try {
+    if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+      return crypto.randomUUID();
+    }
+  } catch {
+    /* fall through */
+  }
+  const rand = Math.random().toString(36).slice(2, 10);
+  return `r-${new Date().toISOString().replace(/[:.]/g, "-")}-${rand}`;
+}
+
+function readAll(): SavedReport[] {
+  if (!isStorageAvailable()) return [];
+  const raw = window.localStorage.getItem(STORAGE_KEY);
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw) as StorageEnvelope;
+    if (!parsed || parsed.schemaVersion !== SCHEMA_VERSION) return [];
+    if (!Array.isArray(parsed.reports)) return [];
+    // Defensive: keep only well-formed rows.
+    return parsed.reports.filter(
+      (r): r is SavedReport =>
+        !!r &&
+        typeof r.id === "string" &&
+        typeof r.savedAt === "string" &&
+        !!r.prospect &&
+        typeof r.prospect.companyName === "string" &&
+        Array.isArray(r.dimensions),
+    );
+  } catch {
+    return [];
+  }
+}
+
+/** Write the full set, evicting oldest rows if the browser refuses on quota. */
+function writeAll(reports: SavedReport[]): { ok: boolean; reason?: string } {
+  if (!isStorageAvailable()) return { ok: false, reason: "no_storage" };
+  let working = reports.slice(0, MAX_REPORTS);
+  for (let attempt = 0; attempt < MAX_REPORTS; attempt++) {
+    try {
+      const envelope: StorageEnvelope = {
+        schemaVersion: SCHEMA_VERSION,
+        reports: working,
+      };
+      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(envelope));
+      return { ok: true };
+    } catch (err) {
+      const name = err instanceof Error ? err.name : String(err);
+      if (name !== "QuotaExceededError" || working.length <= 1) {
+        return { ok: false, reason: name };
+      }
+      // Drop the oldest report and retry. (reports arrive newest-first.)
+      working = working.slice(0, working.length - 1);
+    }
+  }
+  return { ok: false, reason: "QuotaExceededError" };
+}
+
+/** List saved reports, newest first. */
 export async function listSavedReports(): Promise<SavedReport[]> {
-  const res = await fetch("/api/reports", { credentials: "include" });
-  const { data } = await readJson<{ data: DbReport[] }>(res);
-  return data.map(fromDb);
+  const reports = readAll();
+  return reports.sort(
+    (a, b) => new Date(b.savedAt).getTime() - new Date(a.savedAt).getTime(),
+  );
 }
 
 export async function saveReport(
   report: Omit<SavedReport, "id" | "savedAt">,
 ): Promise<SavedReport> {
-  const res = await fetch("/api/reports", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    credentials: "include",
-    body: JSON.stringify(report),
-  });
-  const { data } = await readJson<{ data: DbReport }>(res);
-  return fromDb(data);
+  if (!isStorageAvailable()) {
+    throw new Error(
+      "This browser blocks local storage, so reports can't be saved. Use the Download menu to export instead.",
+    );
+  }
+  const saved: SavedReport = {
+    ...report,
+    id: newId(),
+    savedAt: new Date().toISOString(),
+  };
+  // Prepend so newest is first; existing rows keep their order.
+  const next = [saved, ...readAll()];
+  const result = writeAll(next);
+  if (!result.ok) {
+    throw new Error(
+      result.reason === "QuotaExceededError"
+        ? "Local storage is full — delete some saved reports and try again."
+        : `Couldn't save report (${result.reason ?? "unknown error"}).`,
+    );
+  }
+  return saved;
 }
 
 export async function deleteSavedReport(id: string): Promise<void> {
-  const res = await fetch(`/api/reports/${encodeURIComponent(id)}`, {
-    method: "DELETE",
-    credentials: "include",
-  });
-  await readJson<{ ok: true }>(res);
+  const next = readAll().filter((r) => r.id !== id);
+  const result = writeAll(next);
+  if (!result.ok) {
+    throw new Error(`Couldn't delete report (${result.reason ?? "unknown error"}).`);
+  }
 }
 
 export function slugify(s: string): string {
