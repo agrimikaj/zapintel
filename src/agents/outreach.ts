@@ -807,10 +807,36 @@ export interface GenerationOpts {
   deepMode?: boolean;
 }
 
-export async function generateLeadOutreach(
+/**
+ * Phase 1 — the cheap, decision-grade pass: signal fetch + intel + verdict.
+ *
+ * This is the half of the pipeline a salesperson needs to decide whether a
+ * lead is worth the expensive doc-generation passes. The intel brief it
+ * returns already has the fresh signals cited verbatim inside it, so phase 2
+ * (generateLeadDocs) can run off `intelMarkdown` alone — no signal refetch,
+ * no intel recompute.
+ */
+export interface LeadVerdictResult {
+  leadId: string;
+  intelMarkdown: string;
+  verdict: LeadVerdict;
+  confidence: VerdictConfidence;
+  rejectionClass: RejectionClass;
+  mainReason: string;
+  docType: DocType;
+  vertical: Vertical;
+  signals: Signal[];
+  timings: {
+    signals: number;
+    intel: number;
+    total: number;
+  };
+}
+
+export async function generateLeadVerdict(
   lead: Lead,
   opts: GenerationOpts = {},
-): Promise<LeadGenerationResult> {
+): Promise<LeadVerdictResult> {
   const tTotal0 = Date.now();
 
   // --- 1. Signal fetch (parallel, vertical-gated) -----------------------
@@ -832,6 +858,53 @@ export async function generateLeadOutreach(
 
   const { verdict, confidence, rejectionClass, mainReason } = extractVerdict(intelMarkdown);
   const docType = docTypeForVerdict(verdict, rejectionClass);
+
+  return {
+    leadId: lead.id,
+    intelMarkdown,
+    verdict,
+    confidence,
+    rejectionClass,
+    mainReason,
+    docType,
+    vertical: signalsResult.vertical,
+    signals: signalsResult.signals,
+    timings: {
+      signals: signalsResult.durationMs,
+      intel: intelMs,
+      total: Date.now() - tTotal0,
+    },
+  };
+}
+
+/**
+ * Phase 2 — the expensive doc-generation pass: outreach + critique + rewrite.
+ *
+ * Driven entirely off the phase-1 intel brief + routed doc type, so it can be
+ * invoked independently for whichever subset of leads the operator chose to
+ * write up (e.g. accepted-only). Recomputes nothing from phase 1.
+ */
+export interface LeadDocsResult {
+  leadId: string;
+  outreachMarkdown: string;
+  critiqueMarkdown: string;
+  timings: {
+    outreach: number;
+    critique: number;
+    rewrite: number;
+    total: number;
+  };
+}
+
+export async function generateLeadDocs(
+  lead: Lead,
+  intelMarkdown: string,
+  docType: DocType,
+): Promise<LeadDocsResult> {
+  const tTotal0 = Date.now();
+  if (!intelMarkdown.trim()) {
+    throw new Error("generateLeadDocs requires a non-empty intel brief from phase 1.");
+  }
 
   // --- 3. Outreach pass (doc-type-aware) --------------------------------
   const tOut0 = Date.now();
@@ -901,23 +974,48 @@ export async function generateLeadOutreach(
 
   return {
     leadId: lead.id,
-    intelMarkdown,
     outreachMarkdown: rewritten,
     critiqueMarkdown: critique,
-    verdict,
-    confidence,
-    rejectionClass,
-    mainReason,
-    docType,
-    vertical: signalsResult.vertical,
-    signals: signalsResult.signals,
     timings: {
-      signals: signalsResult.durationMs,
-      intel: intelMs,
       outreach: outMs,
       critique: critiqueMs,
       rewrite: rewriteMs,
       total: Date.now() - tTotal0,
+    },
+  };
+}
+
+/**
+ * Full pipeline in one call — phase 1 + phase 2 composed. Retained for the
+ * one-shot /api/bulk/lead endpoint and any caller that wants the whole
+ * treatment without orchestrating the two phases itself.
+ */
+export async function generateLeadOutreach(
+  lead: Lead,
+  opts: GenerationOpts = {},
+): Promise<LeadGenerationResult> {
+  const v = await generateLeadVerdict(lead, opts);
+  const d = await generateLeadDocs(lead, v.intelMarkdown, v.docType);
+
+  return {
+    leadId: lead.id,
+    intelMarkdown: v.intelMarkdown,
+    outreachMarkdown: d.outreachMarkdown,
+    critiqueMarkdown: d.critiqueMarkdown,
+    verdict: v.verdict,
+    confidence: v.confidence,
+    rejectionClass: v.rejectionClass,
+    mainReason: v.mainReason,
+    docType: v.docType,
+    vertical: v.vertical,
+    signals: v.signals,
+    timings: {
+      signals: v.timings.signals,
+      intel: v.timings.intel,
+      outreach: d.timings.outreach,
+      critique: d.timings.critique,
+      rewrite: d.timings.rewrite,
+      total: v.timings.total + d.timings.total,
     },
   };
 }

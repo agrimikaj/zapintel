@@ -3,17 +3,24 @@
 /**
  * Bulk-outreach generator (multi-pass, doc-type-routed, web-search-grounded).
  *
- * The component:
- *  1. parses a CSV/XLSX client-side via src/lib/leads.ts
- *  2. POSTs each row to /api/bulk/lead — the server runs signal fetch
- *     (Sonar via OpenRouter), intel pass, doc-type-routed outreach pass,
- *     critique pass, rewrite pass — and returns a verdict + doc type
- *     + signal list + the rewritten Markdown
- *  3. shows per-row status with verdict + doc-type badges
- *  4. on download, bundles every result into a ZIP organized by doc type,
- *     plus a single-page founder-ready summary PDF
+ * The component runs a two-phase flow so the operator decides how much
+ * (expensive) doc generation to spend before spending it:
  *
- * Server side is single-lead-per-request — see route comment.
+ *  1. parses a CSV/XLSX client-side via src/lib/leads.ts
+ *  2. PHASE 1 — POSTs each row to /api/bulk/verdict (signal fetch + intel +
+ *     verdict). Cheap. Every lead lands in the "verdicted" state with a
+ *     verdict + routed doc type, but no outreach doc yet.
+ *  3. shows the accepted/rejected split and a decision panel: write docs for
+ *     ALL scored leads, or ACCEPTED ONLY.
+ *  4. PHASE 2 — POSTs the chosen subset to /api/bulk/docs (outreach +
+ *     critique + rewrite), passing back the cached phase-1 intel brief so
+ *     nothing is recomputed. Those rows become "completed".
+ *  5. on download, bundles written docs by doc type + verdict-only briefs +
+ *     a single-page founder-ready summary PDF into one ZIP.
+ *
+ * Both server endpoints are single-lead-per-request — see route comments.
+ * (/api/bulk/lead still runs the full pipeline in one shot for any caller
+ * that wants it.)
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -56,7 +63,12 @@ import {
   saveCurrentBulkRun,
 } from "@/lib/bulkPersistence";
 
-type RowStatus = "pending" | "running" | "completed" | "failed";
+// Two-phase lifecycle:
+//   pending → running (phase 1: scoring) → verdicted → running (phase 2:
+//   writing docs) → completed.  "verdicted" is a stable resting state — a
+//   lead scored but not (yet, or ever) written up. "failed" can occur in
+//   either phase.
+type RowStatus = "pending" | "running" | "verdicted" | "completed" | "failed";
 type Verdict = "Accepted" | "Rejected" | "Unknown";
 type Confidence = "High" | "Medium" | "Low" | "Unknown";
 type DocType =
@@ -104,10 +116,9 @@ function downloadBlob(blob: Blob, filename: string) {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
-interface BulkLeadResponse {
+// Phase 1 payload — cheap scoring pass (signals + intel + verdict).
+interface VerdictResponse {
   intelMarkdown: string;
-  outreachMarkdown: string;
-  critiqueMarkdown: string;
   verdict: Verdict;
   confidence: Confidence;
   rejectionClass: string;
@@ -118,16 +129,23 @@ interface BulkLeadResponse {
   durationMs: number;
 }
 
-async function generateOne(
-  lead: Lead,
-  deepMode: boolean,
+// Phase 2 payload — expensive doc pass (outreach + critique + rewrite).
+interface DocsResponse {
+  outreachMarkdown: string;
+  critiqueMarkdown: string;
+  durationMs: number;
+}
+
+async function postJson<T>(
+  url: string,
+  body: unknown,
   signal: AbortSignal,
-): Promise<BulkLeadResponse> {
-  const res = await fetch("/api/bulk/lead", {
+): Promise<T> {
+  const res = await fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     credentials: "include",
-    body: JSON.stringify({ lead, deepMode }),
+    body: JSON.stringify(body),
     signal,
   });
   const text = await res.text();
@@ -141,8 +159,29 @@ async function generateOne(
     }
     throw new Error(msg);
   }
-  const j = JSON.parse(text) as { data: BulkLeadResponse };
+  const j = JSON.parse(text) as { data: T };
   return j.data;
+}
+
+function fetchVerdict(
+  lead: Lead,
+  deepMode: boolean,
+  signal: AbortSignal,
+): Promise<VerdictResponse> {
+  return postJson<VerdictResponse>("/api/bulk/verdict", { lead, deepMode }, signal);
+}
+
+function fetchDocs(
+  lead: Lead,
+  intelMarkdown: string,
+  docType: DocType,
+  signal: AbortSignal,
+): Promise<DocsResponse> {
+  return postJson<DocsResponse>(
+    "/api/bulk/docs",
+    { lead, intelMarkdown, docType },
+    signal,
+  );
 }
 
 function shortDocLabel(t?: DocType): string {
@@ -181,7 +220,9 @@ function persistRowFromState(r: RowState): PersistedRow {
   // the user can re-run those rows. A running row whose API call dies is
   // already indistinguishable from a pending row.
   const status: PersistedRow["status"] =
-    r.status === "completed" || r.status === "failed" ? r.status : "pending";
+    r.status === "completed" || r.status === "failed" || r.status === "verdicted"
+      ? r.status
+      : "pending";
   return {
     leadId: r.lead.id,
     lead: r.lead,
@@ -244,7 +285,10 @@ export function BulkOutreach() {
     if (saved && saved.rows.length > 0) {
       // Only prompt if there are completed/failed rows worth restoring.
       const hasUseful = saved.rows.some(
-        (r) => r.status === "completed" || r.status === "failed",
+        (r) =>
+          r.status === "completed" ||
+          r.status === "verdicted" ||
+          r.status === "failed",
       );
       if (hasUseful) setRestorePrompt(saved);
     }
@@ -289,10 +333,16 @@ export function BulkOutreach() {
     const out = {
       pending: 0,
       running: 0,
+      verdicted: 0,
       completed: 0,
       failed: 0,
+      // Verdict tallies span BOTH verdicted and completed rows — a verdict
+      // exists the moment phase 1 finishes, doc or no doc.
       accepted: 0,
       rejected: 0,
+      // Accepted/Rejected leads still awaiting a phase-2 doc.
+      acceptedPending: 0,
+      rejectedPending: 0,
       pitch_full: 0,
       enrichment: 0,
       park_warming: 0,
@@ -302,24 +352,51 @@ export function BulkOutreach() {
     };
     for (const r of rows) {
       out[r.status]++;
-      if (r.status === "completed") {
+      if (r.status === "verdicted" || r.status === "completed") {
         if (r.verdict === "Accepted") out.accepted++;
         else if (r.verdict === "Rejected") out.rejected++;
-        if (r.docType) out[r.docType]++;
+      }
+      if (r.status === "verdicted") {
+        if (r.verdict === "Accepted") out.acceptedPending++;
+        else if (r.verdict === "Rejected") out.rejectedPending++;
+      }
+      if (r.status === "completed" && r.docType) {
+        out[r.docType]++;
       }
     }
     return out;
   }, [rows]);
 
-  const allDone =
-    rows.length > 0 && counts.pending === 0 && counts.running === 0;
-  const anyCompleted = counts.completed > 0;
+  // Anything worth downloading: written docs OR verdict-only rows.
+  const anyResult = counts.completed > 0 || counts.verdicted > 0;
+  // Phase 1 has scored everything that could be scored — there are verdicts
+  // waiting on a decision, and nothing is pending or mid-flight.
+  const verdictsReady =
+    rows.length > 0 &&
+    counts.pending === 0 &&
+    counts.running === 0 &&
+    counts.verdicted > 0;
+  // Show the big "all vs accepted-only" decision exactly once: after the first
+  // full scoring pass, before any docs have been written.
+  const showDecision = verdictsReady && counts.completed === 0;
+  // After a partial (accepted-only) docs run, some scored rows still have no
+  // doc — offer to write them up without re-showing the big panel.
+  const remainingToWrite =
+    counts.completed > 0 ? counts.verdicted : 0;
 
   const ingestFile = useCallback(async (file: File) => {
     // Archive any existing current run before starting fresh, so the user
     // doesn't lose prior work on a new upload.
     const cur = loadCurrentBulkRun();
-    if (cur && cur.rows.some((r) => r.status === "completed" || r.status === "failed")) {
+    if (
+      cur &&
+      cur.rows.some(
+        (r) =>
+          r.status === "completed" ||
+          r.status === "verdicted" ||
+          r.status === "failed",
+      )
+    ) {
       archiveCurrentBulkRun();
       setSessions(listArchivedBulkRuns());
     } else {
@@ -421,9 +498,41 @@ export function BulkOutreach() {
     );
   }, []);
 
-  const runAll = useCallback(async () => {
+  // Shared bounded-concurrency runner. `process` handles one lead (its own
+  // status transitions + error handling); the pool just feeds it the queue.
+  const runQueue = useCallback(
+    async (
+      queue: Lead[],
+      process: (lead: Lead, signal: AbortSignal) => Promise<void>,
+    ) => {
+      if (queue.length === 0) return;
+      setIsRunning(true);
+      const controller = new AbortController();
+      abortRef.current = controller;
+
+      let idx = 0;
+      async function worker() {
+        while (idx < queue.length && !controller.signal.aborted) {
+          const lead = queue[idx++];
+          await process(lead, controller.signal);
+        }
+      }
+      const workers = Array.from(
+        { length: Math.min(CONCURRENCY, queue.length) },
+        () => worker(),
+      );
+      await Promise.all(workers);
+
+      setIsRunning(false);
+      abortRef.current = null;
+    },
+    [],
+  );
+
+  // --- Phase 1: score every un-scored lead (signals + intel + verdict). ---
+  const runVerdicts = useCallback(async () => {
     if (rows.length === 0 || isRunning) return;
-    setIsRunning(true);
+    // Retry previously-failed rows on a fresh pass.
     setRows((prev) =>
       prev.map((r) =>
         r.status === "failed"
@@ -431,64 +540,93 @@ export function BulkOutreach() {
           : r,
       ),
     );
-
-    const controller = new AbortController();
-    abortRef.current = controller;
-
     const queue = rows
-      .filter((r) => r.status !== "completed")
+      .filter((r) => r.status === "pending" || r.status === "failed")
       .map((r) => r.lead);
 
-    let idx = 0;
-    async function worker() {
-      while (idx < queue.length && !controller.signal.aborted) {
-        const myIdx = idx++;
-        const lead = queue[myIdx];
+    await runQueue(queue, async (lead, signal) => {
+      updateRow(lead.id, { status: "running" });
+      const t0 = Date.now();
+      try {
+        const v = await fetchVerdict(lead, deepMode, signal);
+        updateRow(lead.id, {
+          status: "verdicted",
+          intelMarkdown: v.intelMarkdown,
+          verdict: v.verdict,
+          confidence: v.confidence,
+          rejectionClass: v.rejectionClass,
+          mainReason: v.mainReason,
+          docType: v.docType,
+          vertical: v.vertical,
+          signals: v.signals,
+          durationMs: v.durationMs,
+        });
+      } catch (err) {
+        if (signal.aborted) return;
+        const msg = err instanceof Error ? err.message : String(err);
+        updateRow(lead.id, {
+          status: "failed",
+          error: msg,
+          durationMs: Date.now() - t0,
+        });
+      }
+    });
+  }, [rows, isRunning, runQueue, updateRow, deepMode]);
+
+  // --- Phase 2: write docs for the chosen scope of scored leads. ---
+  const runDocs = useCallback(
+    async (scope: "all" | "accepted") => {
+      if (rows.length === 0 || isRunning) return;
+      const queue = rows
+        .filter(
+          (r) =>
+            r.status === "verdicted" &&
+            r.intelMarkdown &&
+            r.docType &&
+            (scope === "all" || r.verdict === "Accepted"),
+        )
+        .map((r) => r.lead);
+
+      await runQueue(queue, async (lead, signal) => {
+        const row = rows.find((r) => r.lead.id === lead.id);
+        const intel = row?.intelMarkdown;
+        const docType = row?.docType;
+        if (!intel || !docType) return; // shouldn't happen given the filter
+        // Keep the phase-1 timing visible; track phase-2 time separately.
+        const verdictMs = row?.durationMs ?? 0;
         updateRow(lead.id, { status: "running" });
         const t0 = Date.now();
         try {
-          const result = await generateOne(lead, deepMode, controller.signal);
+          const d = await fetchDocs(lead, intel, docType, signal);
           updateRow(lead.id, {
             status: "completed",
-            intelMarkdown: result.intelMarkdown,
-            outreachMarkdown: result.outreachMarkdown,
-            critiqueMarkdown: result.critiqueMarkdown,
-            verdict: result.verdict,
-            confidence: result.confidence,
-            rejectionClass: result.rejectionClass,
-            mainReason: result.mainReason,
-            docType: result.docType,
-            vertical: result.vertical,
-            signals: result.signals,
-            durationMs: result.durationMs,
+            outreachMarkdown: d.outreachMarkdown,
+            critiqueMarkdown: d.critiqueMarkdown,
+            durationMs: verdictMs + d.durationMs,
           });
         } catch (err) {
-          if (controller.signal.aborted) return;
+          if (signal.aborted) return;
           const msg = err instanceof Error ? err.message : String(err);
-          updateRow(lead.id, {
-            status: "failed",
-            error: msg,
-            durationMs: Date.now() - t0,
-          });
+          // Drop back to "verdicted" (not "failed") so the verdict + intel
+          // survive and the doc can be retried without rescoring.
+          updateRow(lead.id, { status: "verdicted", error: msg });
         }
-      }
-    }
-
-    const workers = Array.from({ length: Math.min(CONCURRENCY, queue.length) }, () =>
-      worker(),
-    );
-    await Promise.all(workers);
-
-    setIsRunning(false);
-    abortRef.current = null;
-  }, [rows, isRunning, updateRow, deepMode]);
+      });
+    },
+    [rows, isRunning, runQueue, updateRow],
+  );
 
   const cancel = useCallback(() => {
     abortRef.current?.abort();
     setIsRunning(false);
     setRows((prev) =>
       prev.map((r) =>
-        r.status === "running" ? { ...r, status: "pending" } : r,
+        r.status === "running"
+          ? // A row mid-phase-2 already has its intel/verdict — fall back to
+            // "verdicted" so it can resume into docs. A row mid-phase-1 has
+            // nothing yet — back to "pending".
+            { ...r, status: r.intelMarkdown ? "verdicted" : "pending" }
+          : r,
       ),
     );
   }, []);
@@ -498,8 +636,12 @@ export function BulkOutreach() {
 
     const completed = rows.filter((r) => r.status === "completed");
     const failed = rows.filter((r) => r.status === "failed");
-    const acceptedCount = completed.filter((r) => r.verdict === "Accepted").length;
-    const rejectedCount = completed.filter((r) => r.verdict === "Rejected").length;
+    // Verdict tallies span every scored row (written or verdict-only).
+    const scored = rows.filter(
+      (r) => r.status === "completed" || r.status === "verdicted",
+    );
+    const acceptedCount = scored.filter((r) => r.verdict === "Accepted").length;
+    const rejectedCount = scored.filter((r) => r.verdict === "Rejected").length;
     const generatedAtISO = new Date().toISOString();
     const sourceLabel = filename || "uploaded file";
 
@@ -508,7 +650,7 @@ export function BulkOutreach() {
     indexLines.push("");
     indexLines.push(`Generated: ${generatedAtISO}`);
     indexLines.push(
-      `Completed: **${completed.length}** (Accepted **${acceptedCount}**, Rejected **${rejectedCount}**) · Failed: **${failed.length}** · Source: ${sourceLabel}`,
+      `Scored: **${scored.length}** (Accepted **${acceptedCount}**, Rejected **${rejectedCount}**) · Docs written: **${completed.length}** · Failed: **${failed.length}** · Source: ${sourceLabel}`,
     );
     indexLines.push("");
     indexLines.push("Routed by doc type:");
@@ -551,6 +693,25 @@ export function BulkOutreach() {
         );
       }
       indexLines.push("");
+    }
+
+    // Scored-but-not-written rows (e.g. rejected leads in an accepted-only
+    // run). They have a verdict + intel brief but no outreach doc — surface
+    // the brief so the operator can still act on / override them.
+    const verdictOnly = rows.filter((r) => r.status === "verdicted");
+    if (verdictOnly.length > 0) {
+      indexLines.push("");
+      indexLines.push("## Verdict only (no outreach doc generated)");
+      indexLines.push("");
+      for (const r of verdictOnly) {
+        const folder = `_verdict-only/${r.lead.id}`;
+        zip.file(`${folder}/intel.md`, r.intelMarkdown || "");
+        const tag = r.verdict ? `[${r.verdict}${r.confidence ? `·${r.confidence}` : ""}]` : "";
+        const reason = r.mainReason ? ` — ${r.mainReason}` : "";
+        indexLines.push(
+          `- **${r.lead.companyName}** — ${r.lead.fullName} (${r.lead.title || "—"}) ${tag} → \`${folder}/intel.md\`${reason}`,
+        );
+      }
     }
 
     if (failed.length > 0) {
@@ -602,10 +763,10 @@ export function BulkOutreach() {
     const blob = await zip.generateAsync({ type: "blob" });
     const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
     downloadBlob(blob, `zapsight-outreach-${stamp}.zip`);
-  }, [rows, anyCompleted, filename]);
+  }, [rows, filename]);
 
   const downloadZip = useCallback(async () => {
-    if (!anyCompleted) return;
+    if (!anyResult) return;
     setDownloadError(null);
     try {
       await buildAndDownloadZip();
@@ -616,7 +777,7 @@ export function BulkOutreach() {
         `Download failed while building the ZIP/PDF: ${msg}. Your results are safe — use "Export JSON" as a fallback.`,
       );
     }
-  }, [anyCompleted, buildAndDownloadZip]);
+  }, [anyResult, buildAndDownloadZip]);
 
   return (
     <section
@@ -633,11 +794,14 @@ export function BulkOutreach() {
             Bulk outreach generator
           </h2>
           <p className="mt-1 text-sm text-ink-secondary">
-            Drop a CSV / XLSX of leads. Each row gets a 4-pass treatment —
-            web-search intel → doc-type-routed outreach → Pavan-style
-            critique → rewrite — and a verdict (Accepted, or Rejected
-            routed to Enrich / Park / Peer-Ref / Up-Org-Ref / Skip). ZIP
-            includes a founder-ready summary PDF.
+            Drop a CSV / XLSX of leads. <b className="text-ink-primary">Step 1</b>{" "}
+            scores every lead with a web-search intel pass — Accepted, or
+            Rejected routed to Enrich / Park / Peer-Ref / Up-Org-Ref / Skip.
+            You see the accepted/rejected split, then{" "}
+            <b className="text-ink-primary">Step 2</b> writes the full
+            outreach docs (outreach → Pavan-style critique → rewrite) for
+            every lead or accepted only — your call. ZIP includes a
+            founder-ready summary PDF.
           </p>
         </div>
         <div className="flex shrink-0 flex-wrap items-center gap-2">
@@ -767,8 +931,11 @@ export function BulkOutreach() {
             </div>
             <div className="flex flex-wrap items-center gap-2 font-mono text-[11px] uppercase tracking-wider">
               <span className="text-accent-cyan">{counts.running} running</span>
+              {counts.verdicted > 0 && (
+                <span className="text-accent-amber">{counts.verdicted} scored</span>
+              )}
               <span className="text-accent-emerald">{counts.completed} done</span>
-              {counts.completed > 0 && (
+              {counts.accepted + counts.rejected > 0 && (
                 <span className="text-ink-tertiary">
                   ({counts.accepted}<span className="text-accent-emerald">✓</span> · {counts.rejected}<span className="text-accent-red">✕</span>)
                 </span>
@@ -804,12 +971,25 @@ export function BulkOutreach() {
                 />
                 Deep
               </label>
-              {!isRunning && !allDone && (
+              {!isRunning && (counts.pending > 0 || counts.failed > 0) && (
                 <button
-                  onClick={runAll}
+                  onClick={runVerdicts}
                   className="flex items-center gap-1.5 rounded-lg bg-accent-cyan px-3 py-2 font-mono text-xs uppercase tracking-wider text-bg-primary hover:bg-accent-emerald"
+                  title="Phase 1: score every lead (Accepted / Rejected) — fast, no outreach docs yet"
                 >
-                  <Play size={14} /> {counts.completed > 0 ? "Resume" : "Generate all"}
+                  <Play size={14} />{" "}
+                  {counts.verdicted + counts.completed > 0
+                    ? "Score remaining"
+                    : "Generate verdicts"}
+                </button>
+              )}
+              {!isRunning && !showDecision && remainingToWrite > 0 && (
+                <button
+                  onClick={() => runDocs("all")}
+                  className="flex items-center gap-1.5 rounded-lg border border-accent-emerald/40 bg-accent-emerald/10 px-3 py-2 font-mono text-xs uppercase tracking-wider text-accent-emerald hover:bg-accent-emerald/20"
+                  title="Write outreach docs for the scored leads that don't have one yet"
+                >
+                  <Play size={14} /> Write remaining ({remainingToWrite})
                 </button>
               )}
               {isRunning && (
@@ -820,17 +1000,62 @@ export function BulkOutreach() {
                   <XCircle size={14} /> Cancel
                 </button>
               )}
-              {anyCompleted && (
+              {anyResult && (
                 <button
                   onClick={downloadZip}
                   className="flex items-center gap-1.5 rounded-lg border border-accent-emerald/40 bg-accent-emerald/10 px-3 py-2 font-mono text-xs uppercase tracking-wider text-accent-emerald hover:bg-accent-emerald/20"
-                  title="Download all completed outreach docs + summary PDF as a ZIP"
+                  title="Download outreach docs + verdict briefs + summary PDF as a ZIP"
                 >
-                  <Download size={14} /> ZIP ({counts.completed})
+                  <Download size={14} /> ZIP ({counts.completed || counts.verdicted})
                 </button>
               )}
             </div>
           </div>
+
+          {showDecision && (
+            <div className="mb-4 rounded-xl border border-accent-cyan/40 bg-accent-cyan/5 p-4">
+              <div className="flex flex-wrap items-center justify-between gap-4">
+                <div>
+                  <div className="flex items-center gap-2 font-mono text-xs uppercase tracking-wider text-accent-cyan">
+                    <CheckCircle2 size={14} /> Verdicts ready — choose what to write
+                  </div>
+                  <div className="mt-1.5 flex flex-wrap items-center gap-3 text-sm text-ink-primary">
+                    <span>
+                      <b className="text-lg">{counts.verdicted}</b> leads scored
+                    </span>
+                    <span className="text-accent-emerald">
+                      <b className="text-lg">{counts.accepted}</b> accepted
+                    </span>
+                    <span className="text-accent-red">
+                      <b className="text-lg">{counts.rejected}</b> rejected
+                    </span>
+                  </div>
+                  <p className="mt-1 font-mono text-[11px] text-ink-tertiary">
+                    Phase 2 writes the full outreach doc (outreach → critique →
+                    rewrite) for the set you pick. Rejected leads keep their
+                    verdict brief either way.
+                  </p>
+                </div>
+                <div className="flex shrink-0 flex-wrap items-center gap-2">
+                  <button
+                    onClick={() => runDocs("accepted")}
+                    disabled={counts.accepted === 0}
+                    className="flex items-center gap-1.5 rounded-lg border border-accent-emerald/40 bg-accent-emerald/10 px-3 py-2 font-mono text-xs uppercase tracking-wider text-accent-emerald hover:bg-accent-emerald/20 disabled:cursor-not-allowed disabled:opacity-40"
+                    title="Generate outreach docs for accepted leads only"
+                  >
+                    <CheckCircle2 size={14} /> Accepted only ({counts.accepted})
+                  </button>
+                  <button
+                    onClick={() => runDocs("all")}
+                    className="flex items-center gap-1.5 rounded-lg bg-accent-cyan px-3 py-2 font-mono text-xs uppercase tracking-wider text-bg-primary hover:bg-accent-emerald"
+                    title="Generate outreach docs for every scored lead (accepted + routed rejections)"
+                  >
+                    <Play size={14} /> Generate all reports ({counts.verdicted})
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
 
           <div className="max-h-[480px] overflow-auto rounded-xl border border-edge-default">
             <table className="w-full border-collapse text-left text-sm">
@@ -865,11 +1090,16 @@ export function BulkOutreach() {
                       {r.status === "failed" && (
                         <span className="text-accent-red">{r.error}</span>
                       )}
-                      {r.status === "completed" && (
+                      {(r.status === "completed" || r.status === "verdicted") && (
                         <div className="space-y-1">
                           <div className="flex flex-wrap items-center gap-1.5">
                             {r.verdict && <VerdictBadge verdict={r.verdict} confidence={r.confidence} />}
                             {r.docType && <DocTypeBadge docType={r.docType} />}
+                            {r.status === "verdicted" && (
+                              <span className="font-mono text-[10px] uppercase tracking-wider text-ink-tertiary">
+                                verdict only
+                              </span>
+                            )}
                           </div>
                           {r.mainReason && (
                             <div className="text-ink-secondary">{r.mainReason}</div>
@@ -879,12 +1109,17 @@ export function BulkOutreach() {
                               ↳ {topSignalLine(r.signals)}
                             </div>
                           )}
+                          {r.status === "verdicted" && r.error && (
+                            <div className="text-accent-red">doc failed: {r.error}</div>
+                          )}
                           <div className="text-ink-tertiary">
                             {Math.round((r.durationMs ?? 0) / 100) / 10}s
                           </div>
                         </div>
                       )}
-                      {r.status === "running" && <span>generating…</span>}
+                      {r.status === "running" && (
+                        <span>{r.intelMarkdown ? "writing doc…" : "scoring…"}</span>
+                      )}
                       {r.status === "pending" && <span>queued</span>}
                     </td>
                   </tr>
@@ -1132,6 +1367,12 @@ function StatusPill({ status }: { status: RowStatus }) {
     return (
       <span className="inline-flex items-center gap-1 rounded-full border border-accent-cyan/30 bg-accent-cyan/10 px-2 py-0.5 font-mono text-[10px] uppercase tracking-wider text-accent-cyan">
         <Loader2 size={10} className="animate-spin" /> running
+      </span>
+    );
+  if (status === "verdicted")
+    return (
+      <span className="inline-flex items-center gap-1 rounded-full border border-accent-amber/30 bg-accent-amber/10 px-2 py-0.5 font-mono text-[10px] uppercase tracking-wider text-accent-amber">
+        <CheckCircle2 size={10} /> scored
       </span>
     );
   if (status === "failed")

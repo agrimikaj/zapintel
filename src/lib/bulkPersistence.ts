@@ -36,7 +36,11 @@ const ARCHIVE_PREFIX = "zapintel.bulk.archive.";
 const MAX_ARCHIVED = 10;
 const SCHEMA_VERSION = 1;
 
-export type PersistedStatus = "pending" | "completed" | "failed";
+// "verdicted" = phase-1 scored (has intel + verdict + routed doc type) but
+// no outreach doc generated yet. It's a stable resting state: a lead the user
+// chose not to write up (e.g. a rejected lead in an accepted-only run) ends
+// here permanently, and a partially-finished run restores cleanly from it.
+export type PersistedStatus = "pending" | "verdicted" | "completed" | "failed";
 
 export interface PersistedSignal {
   type: string;
@@ -249,8 +253,9 @@ function summarizeRun(run: PersistedBulkRun): BulkRunSummary {
   let accepted = 0;
   let rejected = 0;
   for (const r of run.rows) {
-    if (r.status === "completed") {
-      completed++;
+    if (r.status === "completed" || r.status === "verdicted") {
+      // Both carry a verdict; only "completed" also carries a written doc.
+      if (r.status === "completed") completed++;
       if (r.verdict === "Accepted") accepted++;
       else if (r.verdict === "Rejected") rejected++;
     } else if (r.status === "failed") {
@@ -320,5 +325,9 @@ export function newBulkRun(filename: string | null, deepMode: boolean): Persiste
 
 /** True if a row is interesting enough to persist (has any state past pending). */
 export function rowIsPersistable(r: PersistedRow): boolean {
-  return r.status === "completed" || r.status === "failed";
+  return (
+    r.status === "completed" ||
+    r.status === "verdicted" ||
+    r.status === "failed"
+  );
 }
