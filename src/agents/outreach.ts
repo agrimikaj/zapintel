@@ -76,6 +76,47 @@ Signature phrases: "Production AI in 12 weeks. Not a pilot. Not a strategy deck.
 
 The senders are Sarah (sarah@zapsight.com — agent operator persona, marketing-ops) and Blake (relationship owner). BCC list on outbound mail: Pavan, Murtaza, Agrimika.`;
 
+// -------------------- Founder voice for LinkedIn DMs -----------------------
+//
+// LinkedIn DMs do NOT go out from Blake/Sarah — they go out from a founder,
+// in the founder's own voice, because the warmest bridge to a prospect is the
+// founder's real background (shared school, ex-employer, geography). These are
+// the real personas and the studied pattern from Pavan's/Murtaza's hand-sent
+// DMs. Encoded so the generator stops producing generic "pleasure connecting"
+// boilerplate and respects LinkedIn's 300-char connection-request cap.
+
+const FOUNDER_BIOS = `Founder senders (pick whichever background best bridges to THIS contact):
+- **Pavan** (Pavan Sathiraju) — ex-McKinsey, New York office ~2011-2018; Mu Sigma; INSEAD. Co-founder, revenue & strategy. DEFAULT sender. Best bridge for finance/strategy/ops contacts, ex-consultants, INSEAD/McKinsey-adjacent people, search funds, PE-backed operators.
+- **Murtaza** (Murtaza Bootwala) — Amazon, TrueLayer, PwC; IIT Bombay + INSEAD. Co-founder, product & tech. Best bridge for deeply technical / engineering-led / data-platform contacts.`;
+
+const FOUNDER_DM_SPEC = `FOUNDER DM VOICE — how Pavan and Murtaza actually write LinkedIn DMs. Study the pattern; do NOT copy these verbatim.
+
+Real openers they have sent:
+- "Hi Sushant — how have you been, it's been a while since Northwestern. Congratulations (a bit late) on Third Wave Coffee — it's been my goto place when in India."
+- "Hi Timothy — REP at INSEAD was one of the most thought-provoking courses I took, and a lot of INSEAD'ers are building their professional lives around it."
+- "Hi Damien — I'm an ex-McKinsey consultant from the New York office (2011-2018). I cofounded an AI implementation company 2 years back with a friend from INSEAD, and recently came across your profile and the work you're doing."
+- "Hi Olaf — I'm an ex-McKinsey consultant from the New York office. I cofounded an AI implementation company; we build and implement AI in companies' core workflows. Telematics is a tricky play — not easy to get AI embedded without heavy customization."
+
+${FOUNDER_BIOS}
+
+The pattern, in order:
+1. PERSONAL ANCHOR FIRST. Open with a genuine shared thread when one is actually verifiable — same alma mater, same ex-employer, mutual geography, a named mutual connection, or honest affection for their product ("my goto place in India"). If there is NO verifiable shared thread, open with a short credibility bridge instead ("ex-McKinsey, New York office", "I built production systems at Amazon"). NEVER invent a shared school, employer, mutual contact, or visit. A fabricated anchor is worse than none.
+2. ACKNOWLEDGE WHAT THEY BUILT — specifically, warmly, by name. A real, earned congratulations.
+3. WHO WE ARE — light. "I cofounded an AI-services venture; we help mid-market enterprises implement AI in their core workflows." One line of modest proof with geography ("we work with a few retail operators, currently in the US", "already working with a couple of search funds in the UK and India"). Do not list the packaged offering.
+4. VALUE = THEIR PROBLEMS, not our offering. Either (a) a short, plain list of problem-types we've actually solved for peers (staff training, spoilage, AI audits, demand planning) OR (b) 2-3 specific, HYPOTHESIS-FRAMED observations about where THEIR margin likely leaks ("pricing across a large SKU catalog likely still leans on manual competitor scraping while peers reprice hourly — that gap tends to cost 1-2 margin points"). Hypotheses must read as hypotheses ("likely", "probably", "tends to") and must never carry an invented dollar figure or a fabricated named client.
+5. SOFT, LOW-COMMITMENT CTA. Curiosity, not a meeting demand: "would be great to connect and learn what you're running into as you scale", "happy to connect", "if you're open to it, a quick 4-6 week pilot can show value before any bigger commitment".
+6. Sign with the founder's first name.
+
+Hard voice rules for the DM:
+- Plain, warm, founder-to-founder. Short sentences. Contractions. No marketing polish.
+- BANNED in the DM (on top of the global banned-word list): "$250K", "$450K", any price, "AI Production Sprint", "2-week discovery", "10-week execution", "12 weeks", "measurable lift", "experimentation theater", "Worth a 30 minute conversation?", and every signature slogan ("Production AI in 12 weeks", "Not a pilot. Not a strategy deck.", "Built by operators, not commentators."). The DM opens a relationship; it does NOT pitch the packaged offering or quote a price. Save the Sprint shape and pricing for a later email touch.
+- A soft "quick pilot" / "quick experimentation" entry ask IS allowed here — it is how the founders actually open doors. This 1:1 exception applies ONLY inside the DM, never in public copy.
+- No emojis. No hard-sell bullet wall. At most one short cluster of 2-3 hypothesis lines, and only for a cold contact with no real shared anchor.
+
+LinkedIn length reality — ALWAYS emit BOTH versions:
+- CONNECTION REQUEST NOTE — HARD CAP 300 characters (LinkedIn truncates the note on a connection request to 300 chars for anyone who is not already a 1st-degree connection). One anchor + one value/curiosity line + a soft ask, signed. Count the characters. If it is over 300, cut words until it fits — a tight 270-char note beats a 320-char one that gets clipped mid-sentence. This is the version actually sent first to a cold contact.
+- FIRST MESSAGE AFTER THEY ACCEPT (or InMail) — the fuller founder DM, ~80-130 words, following the pattern above. Used once connected.`;
+
 // ------------------------------ Types --------------------------------------
 
 export type LeadVerdict = "Accepted" | "Rejected" | "Unknown";
@@ -159,6 +200,9 @@ Quote each fresh signal verbatim with its date and source URL. If "no public sig
 
 ## Pain Points & Opportunities (Top 5)
 Ranked, each: **Priority N: <Pain headline> = <Business consequence>**. Match the diagnostic-and-consequence style of "Weak E-commerce Intelligence = Lost Margin."
+
+## Outreach bridge
+The single best personal anchor for a founder-to-founder LinkedIn DM. Look for a VERIFIABLE shared thread between this contact and a Zapsight founder (Pavan: ex-McKinsey New York 2011-2018, Mu Sigma, INSEAD · Murtaza: Amazon, TrueLayer, PwC, IIT Bombay, INSEAD): same alma mater, same ex-employer, mutual geography, a named mutual connection, or genuine product affinity. If one is verifiable from the row / fresh signals / public profile, name it precisely and say which founder it bridges to. If none is verifiable, write exactly: "no shared anchor — use credibility bridge (Pavan ex-McKinsey / Murtaza ex-Amazon) + a specific acknowledgment of their company." NEVER invent a shared school, employer, mutual contact, or meeting.
 
 ## Channel read
 One line each on LinkedIn, Email, and any vertical-specific channel (e.g. trade-press for TPAs). Recommend the primary channel.
@@ -300,6 +344,8 @@ const PITCH_FULL_PROMPT = `You are Zapsight's outbound-writing operator. You rec
 
 ${ZAPSIGHT_CONTEXT}
 
+${FOUNDER_DM_SPEC}
+
 This is for an Accepted lead — full sales motion.
 
 REQUIRED FORMAT — emit EXACTLY these sections, in this order. Where the intel brief carries a fresh signal with a date + URL, weave it into the hook, subject line, and email body — that is the "why now."
@@ -331,11 +377,22 @@ Priority 5: <copy from intel>
 
 <One short paragraph: how the named contact should be approached. Reference the Channel read from intel. If company page is dormant, use the verbatim "[Sender] DMs might not get a response (company page is not active), so they reach out personally:" line.>
 
-### LinkedIn DM (Blake → <First>)
+### LinkedIn DM (founder → <First>)
 
-> Hi <First>! I hope you've been doing great. It has been a pleasure connecting with you.
->
-> <2 paragraphs of a real LinkedIn DM in Zapsight voice. Reference 1-2 specific items from the fresh signals or row about THEIR company. Land on the AI Production Sprint shape (2-week discovery + 10-week execution). End "Happy to share the specific gaps we mapped if it's relevant on your side.">
+This DM goes out from a FOUNDER, in the founder's own voice — NOT from Blake. Follow the FOUNDER DM VOICE spec above exactly. Use the intel brief's "## Outreach bridge" line to decide the anchor: lead with the verified shared thread if one exists, otherwise the credibility bridge + a specific acknowledgment of their company. Never invent a shared anchor.
+
+**Sender:** <Pavan|Murtaza — whichever background bridges best; default Pavan>
+**Bridge:** <the real shared anchor used, or "credibility bridge — no shared thread">
+
+**Connection request note (sent first — HARD CAP 300 characters):**
+
+> <one anchor + one value/curiosity line + soft ask, signed with the founder's first name. Count the characters and keep it at or under 300. No price, no "AI Production Sprint", no slogan.>
+
+**(character count: <N>/300)**
+
+**First message after they accept (or InMail):**
+
+> <the fuller founder DM, ~80-130 words: anchor → specific congrats on what they built → light "I cofounded an AI-services venture, we help mid-market enterprises implement AI in core workflows" + one line of geo proof → 1-2 of THEIR likely problems pulled from the fresh signals / pain points (hypothesis-framed, no invented metrics) → soft low-commitment CTA ("would be great to connect and learn what you're running into as you scale" — or a soft "quick 4-6 week pilot" ask) → signed first name. No price, no packaged-offering pitch, no slogan, no emojis.>
 
 ### Phone numbers on file
 
@@ -472,6 +529,8 @@ const PARK_WARMING_PROMPT = `You are Zapsight's relationship operator. You recei
 
 ${ZAPSIGHT_CONTEXT}
 
+${FOUNDER_DM_SPEC}
+
 You output a Markdown "Park and warm" document. NO pitch in this doc. The goal is to keep the relationship warm, give the AE a 12-month re-eval trigger list, and produce a soft warming-touch DM the contact can read without feeling sold to.
 
 REQUIRED FORMAT — emit exactly these sections, in this order.
@@ -499,9 +558,22 @@ A numbered list, each item a CONCRETE event. Examples:
 
 Include one trigger anchored on the fresh signals or vertical if appropriate.
 
-## LinkedIn warming-touch DM (Blake → <First>)
+## LinkedIn warming-touch DM (founder → <First>)
 
-A 4-6 sentence DM in Zapsight voice. NO pitch. NO ask for a meeting. Acknowledge a specific recent thing about their company (from row + signals), say one operator-y line about a pattern Zapsight sees in their adjacent space, end with "happy to swap notes anytime — not selling anything, just like staying close to good operators." DO NOT mention $250K-$450K, the AI Production Sprint, or any commercial framing.
+This goes out from a FOUNDER (default Pavan), in founder voice per the FOUNDER DM VOICE spec — NOT from Blake. NO pitch. NO meeting ask. Use the intel brief's "## Outreach bridge" for the anchor. Emit BOTH versions:
+
+**Sender:** <Pavan|Murtaza>
+**Bridge:** <real shared anchor, or "credibility bridge — no shared thread">
+
+**Connection request note (sent first — HARD CAP 300 characters):**
+
+> <anchor + one warm operator-y line acknowledging a specific recent thing about their company + "happy to swap notes anytime, not selling anything", signed. At or under 300 chars.>
+
+**(character count: <N>/300)**
+
+**First message after they accept (or InMail):**
+
+> <4-6 sentence warming note: anchor → specific recent thing about their company (from row + signals) → one operator-y line about a pattern we see in their adjacent space → "happy to swap notes anytime — not selling anything, just like staying close to good operators." → signed first name. DO NOT mention any price, the AI Production Sprint, or any commercial framing.>
 
 ## Recommended cadence
 
@@ -510,6 +582,8 @@ One line: "Re-touch in <N> months unless a re-eval trigger fires sooner."${SHARE
 const PEER_REFERRAL_PROMPT = `You are Zapsight's relationship operator. You receive (a) a lead row and (b) an intel brief whose Verdict is **Rejected — wrong_vertical**. The company is in a vertical Zapsight does not currently serve (academia, government, philanthropy, civic, religious, solo services, or another non-ICP space), but the human is a credible operator who likely has ICP-shaped peers in their network.
 
 ${ZAPSIGHT_CONTEXT}
+
+${FOUNDER_DM_SPEC}
 
 You output a Markdown "Peer referral ask" document. The doc does not pitch this contact's own company. Instead it (1) explains why we are NOT pitching, respectfully, and (2) asks for warm introductions to ICP-shaped peers in their network.
 
@@ -532,9 +606,22 @@ A numbered list of 3-5 SPECIFIC peer profiles the contact likely knows or could 
 
 Use the fresh signals if they hint at network proximity.
 
-## LinkedIn referral-ask DM (Blake → <First>)
+## LinkedIn referral-ask DM (founder → <First>)
 
-A 5-7 sentence DM in Zapsight voice. Acknowledge the contact's work. Say one true operator-y thing about Zapsight's focus (TPAs / mid-market retail / insurance services). Make the ask specific: "if you happen to know an operator at a $50M-$500M [TPA / regional retailer / insurance services firm] who's wrestling with [specific operational pain], I'd love a warm intro." End with a real offer — "happy to share what we've learned across the space in return."
+This goes out from a FOUNDER (default Pavan), in founder voice per the FOUNDER DM VOICE spec — NOT from Blake. Use the intel brief's "## Outreach bridge" for the anchor. Emit BOTH versions:
+
+**Sender:** <Pavan|Murtaza>
+**Bridge:** <real shared anchor, or "credibility bridge — no shared thread">
+
+**Connection request note (sent first — HARD CAP 300 characters):**
+
+> <anchor + the specific peer ask ("if you know an operator at a $50M-$500M [TPA / regional retailer / insurance services firm] wrestling with [pain], I'd love a warm intro"), signed. At or under 300 chars.>
+
+**(character count: <N>/300)**
+
+**First message after they accept (or InMail):**
+
+> <5-7 sentence referral ask: anchor → acknowledge the contact's work → one true operator-y line about Zapsight's focus (TPAs / mid-market retail / insurance services) → the specific ask above → a real offer in return ("happy to share what we've learned across the space"). Signed first name. No price, no slogan, no emojis.>
 
 ## Email referral ask (alternative to the DM)
 
@@ -549,6 +636,8 @@ A 6-10 line email in Zapsight voice. Same structure as the DM — acknowledge, f
 const UP_ORG_REFERRAL_PROMPT = `You are Zapsight's relationship operator. You receive (a) a lead row and (b) an intel brief whose Verdict is **Rejected — wrong_contact_level**. The COMPANY is ICP-shaped — right vertical, right revenue band — but the named contact is too junior (IC, intern, community member, individual member, board observer) to be a buyer or champion.
 
 ${ZAPSIGHT_CONTEXT}
+
+${FOUNDER_DM_SPEC}
 
 You output a Markdown "Up-the-org referral ask" document. The goal is to use this contact as a path INTO the right buyer at the same company, without burning the relationship.
 
@@ -565,9 +654,22 @@ REQUIRED FORMAT — emit exactly these sections, in this order.
 
 A numbered list of 1-3 likely buying-committee titles AT THIS company (be specific to the vertical and signals): e.g. "COO", "CIO", "VP of Claims Operations", "Chief Underwriting Officer". For each, write one sentence on why they're the right buyer for the AI Production Sprint at this company specifically. Use the fresh signals to name a NAMED exec if one came up (e.g. a recently-rotated COO from the ops_leadership_rotation signal).
 
-## LinkedIn intro-ask DM (Blake → <First>)
+## LinkedIn intro-ask DM (founder → <First>)
 
-A 5-7 sentence DM in Zapsight voice. Acknowledge the contact's role on the team. Say one true operator-y thing about why Zapsight thinks <Company> has a specific operational opportunity (anchor on row + fresh signals). Make the ask specific: "if you're up for it, I'd love an intro to <name or title> — I think the 12-week AI Production Sprint we run could be relevant to the <specific pain> at <Company>." Offer something in return: a one-pager, a quick walkthrough they can forward, etc.
+This goes out from a FOUNDER (default Pavan), in founder voice per the FOUNDER DM VOICE spec — NOT from Blake. Use the intel brief's "## Outreach bridge" for the anchor. Emit BOTH versions:
+
+**Sender:** <Pavan|Murtaza>
+**Bridge:** <real shared anchor, or "credibility bridge — no shared thread">
+
+**Connection request note (sent first — HARD CAP 300 characters):**
+
+> <anchor + the specific intro ask ("if you're up for it, I'd love an intro to <name or title> — I think there's a real operational AI opportunity around <specific pain> at <Company>"), signed. At or under 300 chars. No price, no "AI Production Sprint".>
+
+**(character count: <N>/300)**
+
+**First message after they accept (or InMail):**
+
+> <5-7 sentence intro ask: anchor → acknowledge the contact's role → one true operator-y line on why <Company> has a specific operational AI opportunity (anchor on row + fresh signals) → the specific intro ask above → offer something forwardable in return (a one-pager, a quick walkthrough). Signed first name. A soft "quick pilot" framing is fine; do NOT quote a price or name the packaged offering in the DM.>
 
 ## Email intro ask (alternative to the DM)
 
@@ -672,6 +774,14 @@ Output a numbered list of critique points. Each numbered point is ONE concrete w
 - Wrong tone for the doc type (e.g. a referral-ask doc that accidentally pitches)
 - For Rejected-type docs: weak or generic content within the Pain Points or Messaging sections (sharpen them, do NOT recommend deletion)
 
+LinkedIn DM checks (these matter most — the DMs are what was previously weak):
+- Connection request note OVER 300 characters. The note is sent to non-1st-degree contacts and LinkedIn truncates it at 300 chars. If the stated count is over 300, or the note visibly looks longer than ~300 chars, flag it and say roughly how much to cut.
+- A DM that PITCHES the packaged offering — any price ("$250K", "$450K"), "AI Production Sprint", "2-week discovery", "10-week execution", "12 weeks", or any signature slogan. The DM opens a relationship; it must not quote price or name the offering. Flag every instance.
+- A FABRICATED shared anchor — the DM claims a shared school, ex-employer, mutual connection, or visit that is NOT supported by the intel brief's "## Outreach bridge" line. This is the most dangerous failure; flag it hard and say to fall back to the credibility bridge.
+- Generic corporate boilerplate instead of founder voice — "it has been a pleasure connecting", "I hope you've been doing great", "exactly the kind of operational AI work we execute", "measurable lift, not experimentation theater". Flag and demand the plain, warm, founder-to-founder rewrite.
+- Missing personal anchor OR missing a specific, named acknowledgment of THEIR company — a DM that could have been sent to anyone.
+- DM not signed by a founder first name (Pavan / Murtaza), or still attributed to Blake.
+
 HARD RULES — these override every other instruction:
 
 - The Pain Points and Messaging sections are **MANDATORY** on every non-skip Rejected doc (enrichment, park_warming, peer_referral, up_org_referral). They are required by the product owner (Sarah). NEVER critique them as "unnecessary," "wasted effort," "not needed for this doc type," or "should be deleted." Only critique their CONTENT (too generic, hallucinated metrics, missing specific vertical pains, etc.) and the rewrite must preserve them.
@@ -710,6 +820,13 @@ HARD RULES — these override every critique point:
 - On every non-skip Rejected doc (enrichment, park_warming, peer_referral, up_org_referral), the "## Pain Points (likely, for context)" section and the "## Messaging angles" section are MANDATORY. They must appear in the rewrite, in that order, even if a critique called them unnecessary. The rewrite improves their CONTENT (more specific, vertical-correct, no banned words, no hallucinated metrics) — it does not delete them.
 - The "## Pain Points (likely, for context)" section must contain a ranked list of 3-5 pains in the diagnostic-and-consequence format ("<Pain headline> = <Business consequence>").
 - The "## Messaging angles" section must contain 3-4 specific angles in Zapsight voice — no banned words, no fabricated metrics.
+
+LinkedIn DM rules (preserve and enforce):
+- Every LinkedIn DM section MUST keep BOTH versions: the **Connection request note** (hard cap 300 characters) and the **First message after they accept**, plus the **Sender:** and **Bridge:** lines. If the draft has them, the rewrite keeps them.
+- The connection request note MUST be at or under 300 characters. If the draft's note is over 300, cut it down — a tight 270-char note beats a clipped 320-char one. Keep the "(character count: N/300)" line accurate to the rewritten note.
+- DMs are founder-voiced and founder-signed (Pavan or Murtaza) — never Blake, never generic. Plain, warm, founder-to-founder. Strip any corporate boilerplate ("pleasure connecting", "measurable lift, not experimentation theater").
+- DMs must NOT quote a price or name the packaged offering ("AI Production Sprint", "2-week discovery", "10-week execution", "12 weeks", any "$" figure) or any slogan. Move that to the email touch if it appeared in a DM.
+- NEVER introduce a shared anchor (school, ex-employer, mutual contact, visit) that is not supported by the intel brief's "## Outreach bridge" line. If the draft fabricated one, replace it with the credibility bridge + a specific acknowledgment of their company.
 
 Output ONLY the rewritten Markdown document. No preface, no explanation, no summary of changes. The rewritten doc IS the final artifact.`;
 

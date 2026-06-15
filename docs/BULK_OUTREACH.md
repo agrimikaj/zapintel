@@ -36,7 +36,7 @@ type the outreach pass writes.
 
 | Verdict / class | Doc type | What it contains |
 | --- | --- | --- |
-| Accepted | `pitch_full` | Full Appliance Direct sales template (LinkedIn DM, Touchpoint 1 mail, Touchpoint 2 reminder, competitor sample mail) — anchored on the strongest fresh signal as the "why now" |
+| Accepted | `pitch_full` | Full Appliance Direct sales template (founder-voiced LinkedIn DM, Touchpoint 1 mail, Touchpoint 2 reminder, competitor sample mail) — anchored on the strongest fresh signal as the "why now" |
 | Rejected · `data_integrity` | `enrichment` | What's broken in the row, fields to re-pull, conditions to flip to Yes, **likely pain points**, **messaging angles** |
 | Rejected · `sub_icp_revenue` | `park_warming` | No-pitch warming-touch DM, re-eval triggers, recommended cadence, **likely pain points**, **messaging angles** |
 | Rejected · `wrong_vertical` | `peer_referral` | Ask the contact for warm intros to ICP-shaped peers; DM + email versions, **likely pain points**, **messaging angles** |
@@ -48,6 +48,36 @@ type the outreach pass writes.
 and a "Messaging angles" section** — Sarah's explicit requirement so
 that if a verdict gets manually overridden later, the intelligence layer
 is already in the doc.
+
+## Founder-voiced LinkedIn DMs (2026-06 rework)
+
+Every doc that emits a LinkedIn DM (`pitch_full`, `park_warming`,
+`peer_referral`, `up_org_referral`) now writes it in **founder voice**,
+sent from **Pavan or Murtaza** — not Blake. The voice is modeled on the
+founders' real hand-sent DMs: personal anchor first (shared school,
+ex-employer, geography, or genuine product affinity), specific
+congratulations, a light "we help mid-market enterprises implement AI in
+core workflows", value framed as *their* likely problems, and a soft,
+low-commitment CTA. No price, no "AI Production Sprint", no slogans in
+the DM — those move to the email touch.
+
+Each DM emits **two versions** to respect LinkedIn's limits:
+
+1. **Connection request note — hard cap 300 characters.** LinkedIn
+   truncates the note on a connection request to 300 chars for anyone
+   who is not already a 1st-degree connection. This is the version sent
+   first to a cold contact, and it's why the old single long DM read as
+   redundant/clipped.
+2. **First message after they accept (or InMail)** — the fuller
+   ~80-130-word founder DM.
+
+The intel brief now carries an **`## Outreach bridge`** line naming the
+single best *verifiable* shared anchor (or "no shared anchor — use
+credibility bridge"). The DM writer must use it and must **never invent**
+a shared school, employer, or mutual connection. The critique + rewrite
+passes enforce the 300-char cap, founder voice, no-pitch-in-DM, and the
+no-fabricated-anchor rule. See `FOUNDER_DM_SPEC` in
+`src/agents/outreach.ts`.
 
 ## The five corrected signals
 
