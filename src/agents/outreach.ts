@@ -19,14 +19,20 @@
  *        verbatim with date + URL, never invent.
  *
  *   3. DOC TYPE ROUTER
- *        Verdict + rejection_class → one of five doc generators:
+ *        Verdict + rejection_class (+ vertical) → one of the doc generators:
  *          Accepted                         → pitch_full (the Appliance Direct template)
+ *          Accepted + vertical=private_equity → pe_portfolio (portfolio value-creation play)
  *          Rejected.data_integrity          → enrichment (what's broken + flip conditions)
  *          Rejected.sub_icp_revenue         → park_warming (no-pitch warming touch + re-eval triggers)
  *          Rejected.wrong_vertical          → peer_referral (ask for intro to ICP-shaped peer)
  *          Rejected.wrong_contact_level     → up_org_referral (ask for intro up the org)
  *          Rejected.f500_oversize           → skip (one-line reason, no second pass, no critique)
  *          Rejected.no_pain_hook            → skip (same)
+ *
+ *        Note: board directors / non-exec directors / investors / advisors at
+ *        an ICP-shaped company are NOT wrong_contact_level — they carry
+ *        influence and route to the operating buyer, so they are Accepted
+ *        (pitch_full), not bounced up the org.
  *
  *        EVERY non-skip Rejected doc carries a "## Pain Points (likely)"
  *        section and a "## Messaging angles" section per Sarah's explicit
@@ -134,6 +140,7 @@ export type RejectionClass =
 
 export type DocType =
   | "pitch_full"
+  | "pe_portfolio"
   | "enrichment"
   | "park_warming"
   | "peer_referral"
@@ -220,12 +227,19 @@ Rejection class: data_integrity | sub_icp_revenue | wrong_vertical | wrong_conta
 Main reason: <ONE sentence, under 22 words, the single most important reason behind the verdict>
 
 Verdict criteria:
-- Accepted = ICP fit (mid-market traditional business $50M-$500M revenue OR currently being absorbed into one via the fresh ownership-change signal), named contact is plausibly the buyer or a credible champion, vertical aligns with Zapsight's TPA / mid-market retail / insurance / healthcare admin / manufacturing / logistics focus or a credible adjacent, data is internally consistent, there is at least one real pain hook anchored in either the row or a fresh signal. When Accepted, set Rejection class = none_accepted. Geography (US vs Europe vs other) is NOT a disqualifier on its own — Zapsight's motion is global where the vertical and revenue band fit. Non-US leads in named verticals are Accepted; do not downgrade them to wrong_vertical because of location alone.
+- Accepted = ICP fit on REVENUE BAND + a real pain hook + a contact who can buy, champion, or open the door. Specifically:
+  - Revenue: mid-market traditional business roughly $50M-$500M revenue, OR currently being absorbed into one via a fresh ownership-change signal. This band is the primary gate.
+  - Vertical is a PRIORITY/MESSAGING hint, NOT an accept/reject gate. Zapsight's three named verticals (TPA, mid-market retail, insurance / healthcare admin) are where we lead with the sharpest proof — but ANY mid-market traditional business with real operational complexity is a valid ICP. That explicitly includes manufacturing, logistics/distribution, financial services (banks, lenders, fintech, payments, wealth), healthcare providers, hospitality / food service / travel, construction / engineering, energy / utilities, real estate / property, business services, and other operations-heavy mid-market sectors. Do NOT reject a $50M-$500M operating company just because its industry string is not one of the three named verticals — Accept it and, in "Key insight" and "Win mechanism", route the messaging to the closest named-vertical proof or to a generic operations/margin angle.
+  - Contact: plausibly the economic buyer (COO/CIO/CDO/CFO/VP Ops), a credible champion, OR a board director / non-executive director / chair / investor / advisor who can influence the decision and route us to the operating buyer. A board seat is AUTHORITY, not a disqualifier — accept these and, in the decision-maker map, name the operating buyer (COO/CIO/VP Ops) the board contact would sponsor us into.
+  - Data is internally consistent and there is at least one real pain hook anchored in the row or a fresh signal.
+  - Geography (US vs Europe vs other) is NOT a disqualifier on its own — Zapsight's motion is global where revenue band + operational complexity fit. Do not downgrade a non-US lead to wrong_vertical for location alone.
+  - When Accepted, set Rejection class = none_accepted.
+- Accepted (PE / investor — portfolio angle) = the contact is at a private equity, venture, growth-equity, family-office, or holding-company firm (titles like Partner, Operating Partner, Managing Director, Head of Portfolio Operations, Value Creation lead). ACCEPT these — they are one of our highest-leverage relationships because one operating partner is a door into the entire portfolio of $50M-$500M companies. Do NOT reject a PE/investor as wrong_vertical or wrong_contact_level. Set Verdict = Accepted, Rejection class = none_accepted. In "What we want" and "Win mechanism", frame the PORTFOLIO play: Zapsight as a repeatable AI value-creation lever deployed across portfolio companies, with the operating partner / value-creation lead as the buyer. (The downstream router sends PE leads to a portfolio-specific doc, so make the intel reflect the portfolio thesis, not a single-company pain list.)
 - Rejected.data_integrity = the lead row is contradictory or garbled (revenue/headcount mismatch, industry-vs-website mismatch, email-domain-vs-website mismatch, the named entity cannot be unambiguously identified).
-- Rejected.sub_icp_revenue = company revenue is clearly below the $50M ICP floor AND no fresh ownership signal pulls it into an ICP-shaped parent.
-- Rejected.wrong_vertical = company is in academia, non-profit, government, civic, religious, individual / solo services, or a vertical Zapsight has no pattern-match for — but the human is a credible professional who likely has ICP-shaped peers in their network.
-- Rejected.wrong_contact_level = company itself IS ICP-shaped, but the named contact is too junior (IC, intern, individual member, community member) to be a buyer or champion.
-- Rejected.f500_oversize = company revenue is clearly above $500M / F500 territory with internal AI capacity and Accenture/Deloitte-grade procurement — Zapsight motion does not fit and there is no salvage angle.
+- Rejected.sub_icp_revenue = company revenue is clearly below the $50M ICP floor AND no fresh ownership signal pulls it into an ICP-shaped parent. (Does not apply to PE/investor contacts — judge those on the portfolio, not the firm's own revenue.)
+- Rejected.wrong_vertical = use this ONLY when the organization is genuinely non-commercial or has no operational-AI workload to sprint on: academia / higher-ed, non-profit / philanthropy, government / public administration, civic, religious, or pure solo / individual services. A normal for-profit operating company in an "unusual" sector is NOT wrong_vertical — accept it on revenue-band grounds. When you do use wrong_vertical, the human is still a credible professional who likely has ICP-shaped peers in their network.
+- Rejected.wrong_contact_level = company itself IS ICP-shaped, but the named contact is genuinely too junior to influence a buy — an individual contributor, intern, entry/mid-level specialist, community/individual member with no buying or board influence. NOTE: a board director, non-exec director, chair, founder, owner, investor, or any VP+/C-level/operating-leadership title is NOT too junior — those carry influence and must be Accepted, not classed here.
+- Rejected.f500_oversize = company revenue is clearly above $500M / F500 territory with internal AI capacity and Accenture/Deloitte-grade procurement — Zapsight motion does not fit and there is no salvage angle. (A PE/investor contact is judged on portfolio companies, which are mid-market — do not f500-reject the investor just because the fund's AUM is large.)
 - Rejected.no_pain_hook = none of the above; we simply can't construct a credible AI Production Sprint pain.
 
 Quality bar: a partner should be able to write the outbound or skip-decision directly from this brief without going back to do more research.`;
@@ -318,8 +332,16 @@ export function extractVerdict(intelMarkdown: string): {
   return { verdict, confidence, rejectionClass, mainReason };
 }
 
-export function docTypeForVerdict(verdict: LeadVerdict, rc: RejectionClass): DocType {
-  if (verdict === "Accepted") return "pitch_full";
+export function docTypeForVerdict(
+  verdict: LeadVerdict,
+  rc: RejectionClass,
+  vertical?: Vertical,
+): DocType {
+  if (verdict === "Accepted") {
+    // A PE / investor lead is accepted, but the right artifact is the
+    // portfolio value-creation play, not the single-company pitch.
+    return vertical === "private_equity" ? "pe_portfolio" : "pitch_full";
+  }
   switch (rc) {
     case "data_integrity":
       return "enrichment";
@@ -476,6 +498,130 @@ Zapsight
 Final discipline:
 - NEVER use a banned word ("digital transformation", "unlock value", "empower", "reimagine", "AI-powered", "end-to-end", "significantly", "meaningfully", "world-class").
 - NEVER invent metrics, dollar figures, or named past clients that aren't in the lead row, intel brief, or fresh signals.
+- NEVER use emojis.
+- Output ONLY the Markdown document. No preface.`;
+
+const PE_PORTFOLIO_PROMPT = `You are Zapsight's outbound-writing operator. You receive (a) a single lead row for a contact at a PRIVATE EQUITY / venture / growth-equity / family-office / holding-company firm and (b) a focused intel brief that includes a "Fresh signals (cited from web search)" section. The contact is an investor or operating-side leader (Partner, Operating Partner, Managing Director, Head of Portfolio Operations, Value Creation lead). This is an Accepted lead — but the play is NOT to sell the AI Production Sprint to the FUND. It is to position Zapsight as a repeatable AI value-creation lever deployed ACROSS the fund's portfolio of $50M-$500M companies, with the operating partner as the buyer.
+
+${ZAPSIGHT_CONTEXT}
+
+${FOUNDER_DM_SPEC}
+
+Mental model for this doc: one operating partner is a door into 5-30 portfolio companies. We do not pitch the fund's own "operations." We give the operating partner a repeatable, low-risk way to ship production AI into portfolio companies and show value creation at the next board cycle. The wedge is one portfolio company; the prize is a portfolio-wide motion.
+
+REQUIRED FORMAT — emit EXACTLY these sections, in this order. Where the intel brief carries a fresh signal with a date + URL (new fund close, new platform acquisition, new operating-partner hire), weave it into the hook and email body — that is the "why now."
+
+# <Firm Name>: <one-line firm description from intel — strategy, check size, sectors, AUM if public>
+
+**ICP match —** <First> <Last>, <one-sentence why this PE/operating contact is the right buyer for a portfolio value-creation motion, anchored on their role + the firm's sectors>.
+
+**Portfolio thesis (why Zapsight fits this fund):** <one tight paragraph: where this fund's portfolio companies — given their sectors and size band — most plausibly leak margin or carry manual operational load that production AI fixes in 12 weeks. Tie to the named sectors the fund invests in.>
+
+**What we want with <Firm Name>:** <one tight paragraph: land one portfolio company as a proof wedge (one production-deployed outcome on a KPI the portco's board tracks), then templatize across the portfolio. Name the buying motion: operating partner sponsors → portco COO/CIO executes.>
+
+**Win mechanism:** <phrase>
+<firm website URL>
+
+**Intel Report:** _(generated alongside this outreach doc — see the same ZIP)_
+
+**Fresh signals used:** <bullet 1-3 of the fresh signals you cited, each with its date and source domain, or "no fresh signals — pitch grounded on row only".>
+
+## Portfolio fit map
+
+A ranked list of 3-5 portfolio-company PROFILES (by sector + size band) inside this fund where an AI Production Sprint most plausibly lands first. Each entry: **<Sector / portco profile> = <the specific operational AI opportunity + the KPI it moves>**. If the intel brief names actual portfolio companies, use them; otherwise use sector profiles consistent with the fund's stated strategy. Do NOT invent specific named portfolio companies or fabricated metrics.
+
+## Channels: LinkedIn & Mail
+
+<One short paragraph: how this operating partner should be approached. Reference the Channel read from intel. Founder-to-investor is the warmest path — Pavan's ex-McKinsey / search-fund / PE-operator background bridges best here.>
+
+### LinkedIn DM (founder → <First>)
+
+This DM goes out from a FOUNDER, in the founder's own voice — NOT from Blake. Follow the FOUNDER DM VOICE spec above exactly. Use the intel brief's "## Outreach bridge" line for the anchor (Pavan is the DEFAULT sender for PE/operator/search-fund contacts). The DM opens a peer relationship and floats the portfolio angle softly — it does NOT quote a price or name the packaged offering.
+
+**Sender:** <Pavan|Murtaza — default Pavan for PE/investor contacts>
+**Bridge:** <the real shared anchor used, or "credibility bridge — no shared thread">
+
+**Connection request note (sent first — HARD CAP 300 characters):**
+
+> <one anchor + one portfolio-value-creation curiosity line + soft ask, signed with the founder's first name. At or under 300 chars. No price, no "AI Production Sprint", no slogan.>
+
+**(character count: <N>/300)**
+
+**First message after they accept (or InMail):**
+
+> <the fuller founder DM, ~80-130 words: anchor → acknowledge the fund / a recent move (fresh signal) → light "I cofounded an AI-services venture; we help mid-market operators ship production AI into core workflows in ~12 weeks" + one line of geo/operator proof ("already working with a couple of search funds in the UK and India") → the portfolio angle, hypothesis-framed ("most funds your size have 2-3 portcos where claims/ops/pricing still runs manual — that's usually where a quick win lives") → soft low-commitment CTA ("happy to compare notes on where AI is actually moving the needle across portfolios — or run a quick pilot in one portco before any bigger commitment") → signed first name. No price, no packaged-offering name, no slogan, no emojis.>
+
+### Phone numbers on file
+
+| Contact Phone 1 | Company Phone 1 | Contact Phone 2 | Company Phone 2 |
+| --- | --- | --- | --- |
+| <from lead row> | <from lead row> | <from lead row or blank> | <from lead row or blank> |
+
+## Mail (Touchpoint 1)
+
+**Sender:** Blake
+**To:** <First> <Last>, <Title>: <email from lead row>
+**BCC:** Pavan, Murtaza, Agrimika
+
+**Hook (a Zapsight LinkedIn post will also be made using this):** <one-line hook anchored on the strongest fresh signal OR the portfolio thesis.>
+
+**Subject:** <8-12 word subject, specific to this fund and the portfolio-value-creation angle. NO emojis.>
+
+**Mail:**
+
+Hi <First>,
+
+<Opening sentence tying to a specific fresh signal (new fund, new platform deal) if one exists, else to the fund's stated strategy.>
+
+We help mid-market operators ship production AI on a board-level KPI in about 12 weeks — and the highest-leverage way we have found to do that is through the funds that own them.
+
+For a portfolio like <Firm>'s, two patterns usually pay back fastest:
+
+• **<Portfolio opportunity 1 headline>**
+(<one-line, concrete description of the portco-level build and the KPI it moves>)
+
+• **<Portfolio opportunity 2 headline>**
+(<one-line, concrete description>)
+
+The model is simple: pick one portfolio company, ship one production outcome in 12 weeks, then templatize what works across the rest of the portfolio. You get a repeatable value-creation lever, not another stalled pilot.
+
+**CTA:** Worth a 30-minute conversation on where this could land first across the portfolio?
+Know more at zapsight.com.
+
+**Attachment:** None for touchpoint 1.
+
+## Touchpoint 2 (7th day)
+
+**Reminder mail:**
+
+Hi <First>,
+
+Quick follow-up — I still think there's a strong portfolio value-creation angle for <Firm>, especially in <portco-profile phrase> around <opportunity phrase>.
+
+Happy to share the exact portco patterns we'd start with.
+
+Worth a quick conversation?
+
+**Attachment:** Corporate deck (standard), portfolio value-creation one-pager.
+
+## Sample note for a peer fund
+
+**Subject:** <peer-fund-style subject. NO emojis.>
+
+Hey <First>,
+
+<3-4 sentences: the same portfolio value-creation framing for a comparable fund. Reference a Zapsight-shaped pattern generically ("a comparable lower-middle-market fund", "a similar operator-led PE shop") — do not invent specific named funds, portfolio companies, or fabricated metrics. End with the wedge shape: "Start in one portco: <scope>, <fixed fee>, 12 weeks, the portco owns the system."
+
+Worth 20 minutes Tuesday or Wednesday?
+
+Blake / Sarah
+Zapsight
+
+---
+
+Final discipline:
+- NEVER use a banned word ("digital transformation", "unlock value", "empower", "reimagine", "AI-powered", "end-to-end", "significantly", "meaningfully", "world-class").
+- NEVER invent metrics, dollar figures, named portfolio companies, or named past clients that aren't in the lead row, intel brief, or fresh signals.
 - NEVER use emojis.
 - Output ONLY the Markdown document. No preface.`;
 
@@ -705,6 +851,8 @@ function systemPromptForDocType(t: DocType): string {
   switch (t) {
     case "pitch_full":
       return PITCH_FULL_PROMPT;
+    case "pe_portfolio":
+      return PE_PORTFOLIO_PROMPT;
     case "enrichment":
       return ENRICHMENT_PROMPT;
     case "park_warming":
@@ -974,7 +1122,7 @@ export async function generateLeadVerdict(
   if (!intelMarkdown.trim()) throw new Error("Intel pass returned empty output.");
 
   const { verdict, confidence, rejectionClass, mainReason } = extractVerdict(intelMarkdown);
-  const docType = docTypeForVerdict(verdict, rejectionClass);
+  const docType = docTypeForVerdict(verdict, rejectionClass, signalsResult.vertical);
 
   return {
     leadId: lead.id,

@@ -51,6 +51,7 @@ const LeadSchema = z.object({
 
 const DocTypeSchema = z.enum([
   "pitch_full",
+  "pe_portfolio",
   "enrichment",
   "park_warming",
   "peer_referral",

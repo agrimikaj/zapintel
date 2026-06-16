@@ -17,6 +17,18 @@
  * try the universal signals (ownership change, ops leadership rotation,
  * restructuring) but skip the vertical-specific ones.
  *
+ * Important: the vertical is a SEARCH-routing + messaging hint, NOT an
+ * accept/reject gate. Zapsight's ICP is any mid-market traditional business
+ * ($50M-$500M) with real operational complexity; the named verticals are
+ * priority order for proof and messaging, not a filter. The accept/reject
+ * decision lives in the intel verdict (src/agents/outreach.ts), which treats
+ * every vertical here except `skip` as a viable ICP on revenue-band grounds.
+ *
+ * `private_equity` is the one special case: it routes to the PE
+ * portfolio-value-creation play rather than a single-company pitch, because
+ * the buyer (operating partner / head of value creation) buys for the whole
+ * portfolio, not for the firm itself.
+ *
  * `skip` is the early-exit signal: no web search fired at all, doc-type
  * routing goes straight to a one-line skip note.
  */
@@ -25,11 +37,17 @@ export type Vertical =
   | "tpa"
   | "insurance_services"
   | "healthcare_admin"
+  | "private_equity"
+  | "financial_services"
   | "retail"
   | "manufacturing"
   | "b2b_saas"
   | "logistics"
   | "professional_services"
+  | "hospitality"
+  | "construction"
+  | "energy_utilities"
+  | "real_estate"
   | "skip"
   | "unknown";
 
@@ -116,6 +134,56 @@ const RULES: Rule[] = [
     ],
   },
 
+  // Private equity / venture / holdco — NOT an operating ICP, but a
+  // high-value relationship: one operating partner is a door into the whole
+  // portfolio. Routed to the PE "portfolio value-creation" play, not the
+  // single-company pitch. Sits above financial_services so PE/VC strings win
+  // over the generic "financial services" bucket.
+  {
+    vertical: "private_equity",
+    any: [
+      "private equity",
+      "venture capital",
+      "venture fund",
+      "growth equity",
+      "buyout",
+      "leveraged buyout",
+      "family office",
+      "holding company",
+      "holdco",
+      "portfolio company",
+      "investment firm",
+      "private capital",
+      "capital partners",
+      "search fund",
+      "middle-market private",
+    ],
+  },
+
+  // Financial services — banks, lenders, fintech, payments, wealth. Operating
+  // mid-market financial businesses (distinct from the PE/VC investors above).
+  {
+    vertical: "financial_services",
+    any: [
+      "bank",
+      "credit union",
+      "lending",
+      "lender",
+      "mortgage",
+      "fintech",
+      "financial technology",
+      "financial services",
+      "payments",
+      "wealth management",
+      "asset management",
+      "capital markets",
+      "consumer finance",
+      "commercial finance",
+      "factoring",
+      "leasing",
+    ],
+  },
+
   // Manufacturing.
   {
     vertical: "manufacturing",
@@ -199,6 +267,79 @@ const RULES: Rule[] = [
       "management consult",
     ],
   },
+
+  // Hospitality / food service / travel / leisure.
+  {
+    vertical: "hospitality",
+    any: [
+      "hospitality",
+      "hotel",
+      "restaurant",
+      "food service",
+      "foodservice",
+      "travel",
+      "tourism",
+      "leisure",
+      "gaming",
+      "casino",
+      "resort",
+      "lodging",
+      "catering",
+    ],
+  },
+
+  // Construction / engineering / built environment.
+  {
+    vertical: "construction",
+    any: [
+      "construction",
+      "contractor",
+      "building materials",
+      "civil engineering",
+      "architecture",
+      "homebuild",
+      "home build",
+      "infrastructure",
+      "built environment",
+      "aec",
+    ],
+  },
+
+  // Energy / utilities / resources.
+  {
+    vertical: "energy_utilities",
+    any: [
+      "energy",
+      "oil & gas",
+      "oil and gas",
+      "utilit",
+      "power generation",
+      "renewable",
+      "solar",
+      "wind power",
+      "electric utility",
+      "natural gas",
+      "mining",
+      "petroleum",
+      "drilling",
+    ],
+  },
+
+  // Real estate / property / facilities.
+  {
+    vertical: "real_estate",
+    any: [
+      "real estate",
+      "property management",
+      "reit",
+      "commercial real estate",
+      "residential real estate",
+      "facilities management",
+      "property developer",
+      "realty",
+      "proptech",
+    ],
+  },
 ];
 
 export function inferVertical(industryRaw?: string): Vertical {
@@ -248,6 +389,22 @@ const VERTICAL_GATE: Record<Vertical, SignalType[]> = {
     "restructuring",
     "regulatory_event",
   ],
+  // For a PE/VC investor the live signals are platform acquisitions
+  // (ownership_change), new operating-partner / value-creation hires
+  // (ops_leadership_rotation), and fund closes (funding_standalone).
+  private_equity: [
+    "ownership_change",
+    "ops_leadership_rotation",
+    "funding_standalone",
+    "restructuring",
+  ],
+  financial_services: [
+    "ownership_change",
+    "ops_leadership_rotation",
+    "systems_migration",
+    "regulatory_event",
+    "restructuring",
+  ],
   healthcare_admin: [
     "ownership_change",
     "ops_leadership_rotation",
@@ -284,6 +441,31 @@ const VERTICAL_GATE: Record<Vertical, SignalType[]> = {
   professional_services: [
     "ownership_change",
     "ops_leadership_rotation",
+    "restructuring",
+  ],
+  hospitality: [
+    "ownership_change",
+    "ops_leadership_rotation",
+    "systems_migration",
+    "restructuring",
+  ],
+  construction: [
+    "ownership_change",
+    "ops_leadership_rotation",
+    "systems_migration",
+    "restructuring",
+  ],
+  energy_utilities: [
+    "ownership_change",
+    "ops_leadership_rotation",
+    "systems_migration",
+    "regulatory_event",
+    "restructuring",
+  ],
+  real_estate: [
+    "ownership_change",
+    "ops_leadership_rotation",
+    "systems_migration",
     "restructuring",
   ],
   unknown: ["ownership_change", "ops_leadership_rotation", "restructuring"],

@@ -73,6 +73,7 @@ type Verdict = "Accepted" | "Rejected" | "Unknown";
 type Confidence = "High" | "Medium" | "Low" | "Unknown";
 type DocType =
   | "pitch_full"
+  | "pe_portfolio"
   | "enrichment"
   | "park_warming"
   | "peer_referral"
@@ -188,6 +189,8 @@ function shortDocLabel(t?: DocType): string {
   switch (t) {
     case "pitch_full":
       return "Pitch";
+    case "pe_portfolio":
+      return "PE Portfolio";
     case "enrichment":
       return "Enrich";
     case "park_warming":
@@ -344,6 +347,7 @@ export function BulkOutreach() {
       acceptedPending: 0,
       rejectedPending: 0,
       pitch_full: 0,
+      pe_portfolio: 0,
       enrichment: 0,
       park_warming: 0,
       peer_referral: 0,
@@ -656,6 +660,7 @@ export function BulkOutreach() {
     indexLines.push("Routed by doc type:");
     const docTypes: DocType[] = [
       "pitch_full",
+      "pe_portfolio",
       "enrichment",
       "park_warming",
       "peer_referral",
@@ -948,6 +953,7 @@ export function BulkOutreach() {
                 <span className="text-ink-tertiary">
                   · routed:{" "}
                   {counts.pitch_full > 0 && <>P{counts.pitch_full} </>}
+                  {counts.pe_portfolio > 0 && <>PE{counts.pe_portfolio} </>}
                   {counts.enrichment > 0 && <>E{counts.enrichment} </>}
                   {counts.park_warming > 0 && <>Pk{counts.park_warming} </>}
                   {counts.peer_referral > 0 && <>Pr{counts.peer_referral} </>}
@@ -1329,6 +1335,9 @@ function DocTypeBadge({ docType }: { docType: DocType }) {
   switch (docType) {
     case "pitch_full":
       cls = "border-accent-emerald/30 bg-accent-emerald/10 text-accent-emerald";
+      break;
+    case "pe_portfolio":
+      cls = "border-teal-400/30 bg-teal-400/10 text-teal-300";
       break;
     case "enrichment":
       cls = "border-accent-amber/30 bg-accent-amber/10 text-accent-amber";

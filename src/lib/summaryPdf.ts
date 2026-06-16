@@ -15,6 +15,7 @@ import { PDFDocument, StandardFonts, rgb, PDFFont, PDFPage } from "pdf-lib";
 
 export type SummaryDocType =
   | "pitch_full"
+  | "pe_portfolio"
   | "enrichment"
   | "park_warming"
   | "peer_referral"
@@ -115,6 +116,8 @@ function shortDocLabel(t: SummaryDocType): string {
   switch (t) {
     case "pitch_full":
       return "Pitch";
+    case "pe_portfolio":
+      return "PE Portfolio";
     case "enrichment":
       return "Enrich";
     case "park_warming":
@@ -134,6 +137,8 @@ function docTypeColor(t: SummaryDocType): { r: number; g: number; b: number } {
   switch (t) {
     case "pitch_full":
       return { r: 0.08, g: 0.55, b: 0.32 };
+    case "pe_portfolio":
+      return { r: 0.1, g: 0.5, b: 0.5 }; // teal — accepted, portfolio play
     case "enrichment":
       return { r: 0.85, g: 0.45, b: 0.05 }; // amber
     case "park_warming":
@@ -226,6 +231,7 @@ function drawHeader(
   });
   const dtc = meta.docTypeCounts || {};
   const docTypeBits: string[] = [];
+  if ((dtc.pe_portfolio ?? 0) > 0) docTypeBits.push(`${dtc.pe_portfolio} pe-portfolio`);
   if ((dtc.enrichment ?? 0) > 0) docTypeBits.push(`${dtc.enrichment} enrich`);
   if ((dtc.park_warming ?? 0) > 0) docTypeBits.push(`${dtc.park_warming} park`);
   if ((dtc.peer_referral ?? 0) > 0) docTypeBits.push(`${dtc.peer_referral} peer-ref`);

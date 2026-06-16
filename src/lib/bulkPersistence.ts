@@ -64,6 +64,7 @@ export interface PersistedRow {
   mainReason?: string;
   docType?:
     | "pitch_full"
+    | "pe_portfolio"
     | "enrichment"
     | "park_warming"
     | "peer_referral"
