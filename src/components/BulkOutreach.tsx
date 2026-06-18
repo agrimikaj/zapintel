@@ -47,8 +47,14 @@ import { Lead, leadHeadline, parseLeadFile } from "@/lib/leads";
 import {
   buildSummaryPdf,
   SummaryDocType,
+  SummaryMeta,
   SummaryRow,
 } from "@/lib/summaryPdf";
+import {
+  buildOutreachCsv,
+  countOutreachReady,
+  slugifyCampaign,
+} from "@/lib/outreachCsv";
 import {
   archiveCurrentBulkRun,
   BulkRunSummary,
@@ -115,6 +121,66 @@ function downloadBlob(blob: Blob, filename: string) {
   a.download = filename;
   a.click();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+const ALL_DOC_TYPES: DocType[] = [
+  "pitch_full",
+  "pe_portfolio",
+  "enrichment",
+  "park_warming",
+  "peer_referral",
+  "up_org_referral",
+  "skip",
+];
+
+/**
+ * Build the founders-summary inputs (one table row per lead + header meta).
+ * Shared by the ZIP path and the PDF+CSV path so the summary never drifts
+ * between the two downloads.
+ */
+function buildSummaryInputs(rows: RowState[], filename: string | null) {
+  const completed = rows.filter((r) => r.status === "completed");
+  const failed = rows.filter((r) => r.status === "failed");
+  const scored = rows.filter(
+    (r) => r.status === "completed" || r.status === "verdicted",
+  );
+  const acceptedCount = scored.filter((r) => r.verdict === "Accepted").length;
+  const rejectedCount = scored.filter((r) => r.verdict === "Rejected").length;
+  const generatedAtISO = new Date().toISOString();
+  const sourceLabel = filename || "uploaded file";
+
+  const summaryRows: SummaryRow[] = rows.map((r, i) => ({
+    index: i + 1,
+    leadName: r.lead.fullName,
+    company: r.lead.companyName,
+    verdict:
+      r.status === "failed"
+        ? "Failed"
+        : (r.verdict as SummaryRow["verdict"]) || "Unknown",
+    docType: (r.status === "failed" ? "—" : r.docType || "—") as SummaryDocType,
+    signalUsed: topSignalLine(r.signals),
+    mainReason:
+      r.status === "failed"
+        ? r.error || "Generation failed."
+        : r.mainReason || "—",
+  }));
+
+  const docTypeCounts: Partial<Record<SummaryDocType, number>> = {};
+  for (const t of ALL_DOC_TYPES) {
+    docTypeCounts[t] = completed.filter((r) => r.docType === t).length;
+  }
+
+  const meta: SummaryMeta = {
+    sourceLabel,
+    generatedAtISO,
+    totalLeads: rows.length,
+    acceptedCount,
+    rejectedCount,
+    failedCount: failed.length,
+    docTypeCounts,
+  };
+
+  return { summaryRows, meta, generatedAtISO };
 }
 
 // Phase 1 payload — cheap scoring pass (signals + intel + verdict).
@@ -733,36 +799,8 @@ export function BulkOutreach() {
     zip.file("_index.md", indexLines.join("\n"));
 
     // Summary PDF — one row per lead (completed + failed), verdict + doc + main reason + top signal.
-    const summaryRows: SummaryRow[] = rows.map((r, i) => ({
-      index: i + 1,
-      leadName: r.lead.fullName,
-      company: r.lead.companyName,
-      verdict:
-        r.status === "failed"
-          ? "Failed"
-          : (r.verdict as SummaryRow["verdict"]) || "Unknown",
-      docType: (r.status === "failed" ? "—" : r.docType || "—") as SummaryDocType,
-      signalUsed: topSignalLine(r.signals),
-      mainReason:
-        r.status === "failed"
-          ? r.error || "Generation failed."
-          : r.mainReason || "—",
-    }));
-
-    const docTypeCounts: Partial<Record<SummaryDocType, number>> = {};
-    for (const t of docTypes) {
-      docTypeCounts[t] = completed.filter((r) => r.docType === t).length;
-    }
-
-    const pdfBytes = await buildSummaryPdf(summaryRows, {
-      sourceLabel,
-      generatedAtISO,
-      totalLeads: rows.length,
-      acceptedCount,
-      rejectedCount,
-      failedCount: failed.length,
-      docTypeCounts,
-    });
+    const { summaryRows, meta } = buildSummaryInputs(rows, filename);
+    const pdfBytes = await buildSummaryPdf(summaryRows, meta);
     zip.file("_summary.pdf", pdfBytes);
 
     const blob = await zip.generateAsync({ type: "blob" });
@@ -783,6 +821,64 @@ export function BulkOutreach() {
       );
     }
   }, [anyResult, buildAndDownloadZip]);
+
+  // Main download: founders summary PDF + the outreach CSV the Tracker
+  // execution sheet imports. Pure client-side transform of data already in
+  // memory — no API calls, no extra cost.
+  const downloadPdfAndCsv = useCallback(async () => {
+    if (!anyResult) return;
+    setDownloadError(null);
+    try {
+      const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+
+      const { summaryRows, meta } = buildSummaryInputs(rows, filename);
+      const pdfBytes = await buildSummaryPdf(summaryRows, meta);
+      downloadBlob(
+        // Uint8Array is a valid BlobPart at runtime; cast past the lib's
+        // ArrayBufferLike vs ArrayBuffer strictness.
+        new Blob([pdfBytes as unknown as BlobPart], { type: "application/pdf" }),
+        `zapsight-outreach-summary-${stamp}.pdf`,
+      );
+
+      const campaignId = slugifyCampaign(filename || "");
+      const { csv, count } = buildOutreachCsv(
+        rows.map((r) => ({
+          lead: r.lead,
+          outreachMarkdown: r.outreachMarkdown,
+          intelMarkdown: r.intelMarkdown,
+        })),
+        campaignId,
+      );
+      downloadBlob(
+        new Blob([csv], { type: "text/csv;charset=utf-8" }),
+        `${campaignId}-leads-${stamp}.csv`,
+      );
+
+      if (count === 0) {
+        setDownloadError(
+          "Summary PDF downloaded, but no send-ready outreach docs exist yet — the CSV has headers only. Write pitch docs (Phase 2) first.",
+        );
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setDownloadError(
+        `Download failed while building the PDF/CSV: ${msg}. Your results are safe — try the full ZIP as a fallback.`,
+      );
+    }
+  }, [anyResult, rows, filename]);
+
+  // How many leads have send-ready outreach copy (DM and/or email body).
+  const csvReadyCount = useMemo(
+    () =>
+      countOutreachReady(
+        rows.map((r) => ({
+          lead: r.lead,
+          outreachMarkdown: r.outreachMarkdown,
+          intelMarkdown: r.intelMarkdown,
+        })),
+      ),
+    [rows],
+  );
 
   return (
     <section
@@ -1007,13 +1103,22 @@ export function BulkOutreach() {
                 </button>
               )}
               {anyResult && (
-                <button
-                  onClick={downloadZip}
-                  className="flex items-center gap-1.5 rounded-lg border border-accent-emerald/40 bg-accent-emerald/10 px-3 py-2 font-mono text-xs uppercase tracking-wider text-accent-emerald hover:bg-accent-emerald/20"
-                  title="Download outreach docs + verdict briefs + summary PDF as a ZIP"
-                >
-                  <Download size={14} /> ZIP ({counts.completed || counts.verdicted})
-                </button>
+                <>
+                  <button
+                    onClick={downloadPdfAndCsv}
+                    className="flex items-center gap-1.5 rounded-lg bg-accent-emerald px-3 py-2 font-mono text-xs uppercase tracking-wider text-bg-primary hover:bg-accent-cyan"
+                    title="Main download: founders summary PDF + outreach CSV for the execution sheet (Tracker Campaign tab)"
+                  >
+                    <Download size={14} /> PDF + CSV ({csvReadyCount})
+                  </button>
+                  <button
+                    onClick={downloadZip}
+                    className="flex items-center gap-1.5 rounded-lg border border-accent-emerald/40 bg-accent-emerald/10 px-3 py-2 font-mono text-xs uppercase tracking-wider text-accent-emerald hover:bg-accent-emerald/20"
+                    title="Full report: outreach docs + verdict briefs + summary PDF, all folders, as a ZIP"
+                  >
+                    <Download size={14} /> Full ZIP ({counts.completed || counts.verdicted})
+                  </button>
+                </>
               )}
             </div>
           </div>
