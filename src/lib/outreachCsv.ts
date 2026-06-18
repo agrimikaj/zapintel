@@ -138,6 +138,22 @@ function extractSubject(mailSection: string): string {
   return m ? m[1].trim() : "";
 }
 
+const EMAIL_RE = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/;
+
+/**
+ * Email from the Mail "**To:**" line, used only as a fallback when the source
+ * lead has no email (common with Sales-Navigator exports that carry no email
+ * column but where the doc surfaced one). Placeholders ("—", "[email to be
+ * sourced]", "email not on file") contain no "@", so they never match. Scoped
+ * to the To: line so sender/zapsight addresses in the body are never picked up.
+ */
+export function extractToEmail(md: string): string {
+  const m = (md || "").match(/^\*\*To:\*\*\s*(.+)$/m);
+  if (!m) return "";
+  const e = m[1].match(EMAIL_RE);
+  return e ? e[0] : "";
+}
+
 function extractBody(mailSection: string): string {
   const idx = mailSection.search(/^\*\*Mail:\*\*/m);
   if (idx === -1) return "";
@@ -213,6 +229,7 @@ export function buildOutreachCsv(
 
     const l = item.lead;
     const { first, last } = splitName(l);
+    const email = (l.email || "").trim() || extractToEmail(item.outreachMarkdown);
     const row = [
       campaignId,
       first,
@@ -221,7 +238,7 @@ export function buildOutreachCsv(
       l.companyName || "",
       l.companyIndustry || "",
       l.linkedinUrl || "",
-      l.email || "",
+      email,
       l.companyWebsite || "",
       ex.painPoints,
       ex.dm,
