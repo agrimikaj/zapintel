@@ -58,6 +58,7 @@
 
 import { Lead } from "@/lib/leads";
 import { completeChat } from "./openrouter";
+import { getBrain } from "@/lib/brain/client";
 import {
   fetchSignalsForLead,
   renderSignalsBlock,
@@ -1098,6 +1099,56 @@ export interface LeadVerdictResult {
   };
 }
 
+// --- Zapsight Brain: shared cross-agent memory ------------------------------
+// Recall is best-effort and cached per warm instance so it adds ~one brain call
+// per run, not per lead. No BRAIN_* env → getBrain() is null → these no-op and
+// the pipeline runs exactly as before.
+let _sharedKnowledge: { text: string; at: number } | null = null;
+const SHARED_TTL_MS = 10 * 60 * 1000;
+
+async function recallSharedKnowledge(): Promise<string> {
+  const brain = getBrain();
+  if (!brain) return "";
+  if (_sharedKnowledge && Date.now() - _sharedKnowledge.at < SHARED_TTL_MS) {
+    return _sharedKnowledge.text;
+  }
+  try {
+    const { patterns } = await brain.patterns.recall({
+      query: "Zapsight positioning, ICP, prospect qualification, and outreach voice rules",
+      limit: 8,
+    });
+    const text = patterns.length
+      ? "Shared Zapsight knowledge (from the agent brain — apply these):\n" +
+        patterns.map((p) => `- ${p.statement}`).join("\n") +
+        "\n\n"
+      : "";
+    _sharedKnowledge = { text, at: Date.now() };
+    return text;
+  } catch {
+    return ""; // brain unreachable → proceed without it
+  }
+}
+
+async function recordOutreachEvent(lead: Lead, docType: DocType): Promise<void> {
+  const brain = getBrain();
+  if (!brain) return;
+  try {
+    await brain.events.record({
+      kind: "outreach.generated",
+      payload: {
+        company: lead.companyName,
+        contact: lead.fullName,
+        title: lead.title || undefined,
+        docType,
+      },
+      tags: ["outreach", docType],
+      embedText: `Outreach (${docType}) generated for ${lead.fullName} at ${lead.companyName}`,
+    });
+  } catch {
+    /* non-fatal — recording a learning must never break generation */
+  }
+}
+
 export async function generateLeadVerdict(
   lead: Lead,
   opts: GenerationOpts = {},
@@ -1111,9 +1162,10 @@ export async function generateLeadVerdict(
 
   // --- 2. Intel pass ----------------------------------------------------
   const tIntel0 = Date.now();
+  const shared = await recallSharedKnowledge();
   const intelMarkdown = await completeChat(
     [
-      { role: "system", content: buildIntelSystemPrompt() },
+      { role: "system", content: shared + buildIntelSystemPrompt() },
       { role: "user", content: buildIntelUserPrompt(lead, signalsResult) },
     ],
     { maxTokens: 2400, temperature: 0.35 },
@@ -1173,9 +1225,10 @@ export async function generateLeadDocs(
 
   // --- 3. Outreach pass (doc-type-aware) --------------------------------
   const tOut0 = Date.now();
+  const shared = await recallSharedKnowledge();
   const outreachDraft = await completeChat(
     [
-      { role: "system", content: systemPromptForDocType(docType) },
+      { role: "system", content: shared + systemPromptForDocType(docType) },
       { role: "user", content: buildOutreachUserPrompt(lead, intelMarkdown, docType) },
     ],
     { maxTokens: docType === "skip" ? 600 : 2800, temperature: 0.4 },
@@ -1236,6 +1289,10 @@ export async function generateLeadDocs(
       rewritten = enforceRejectedTail(rewritten, outreachDraft);
     }
   }
+
+  // Record this generation into the brain so other agents (and future runs)
+  // can recall what outreach we've produced. Best-effort, never blocks output.
+  await recordOutreachEvent(lead, docType);
 
   return {
     leadId: lead.id,
