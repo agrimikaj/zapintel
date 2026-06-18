@@ -251,6 +251,50 @@ function fetchDocs(
   );
 }
 
+interface WebsiteEnrichResponse {
+  website: string;
+  source: string | null;
+}
+interface ContactEnrichResponse {
+  linkedinUrl: string;
+  linkedinConfidence: "high" | "medium" | null;
+  linkedinSource: string | null;
+  email: string;
+  emailSource: "lusha" | null;
+}
+
+// Step 3 of the flow: find a company's website when the sheet didn't carry one.
+function fetchWebsiteEnrich(
+  company: string,
+  signal: AbortSignal,
+): Promise<WebsiteEnrichResponse> {
+  return postJson<WebsiteEnrichResponse>(
+    "/api/enrich/website",
+    { company },
+    signal,
+  );
+}
+
+// Step 6: fill the LinkedIn URL + (verified) email columns for the CSV.
+function fetchContactEnrich(
+  lead: Lead,
+  signal: AbortSignal,
+): Promise<ContactEnrichResponse> {
+  return postJson<ContactEnrichResponse>(
+    "/api/enrich/contact",
+    {
+      firstName: lead.firstName,
+      lastName: lead.lastName,
+      fullName: lead.fullName,
+      company: lead.companyName,
+      title: lead.title,
+      haveLinkedin: Boolean(lead.linkedinUrl),
+      haveEmail: Boolean(lead.email),
+    },
+    signal,
+  );
+}
+
 function shortDocLabel(t?: DocType): string {
   switch (t) {
     case "pitch_full":
@@ -618,7 +662,22 @@ export function BulkOutreach() {
       updateRow(lead.id, { status: "running" });
       const t0 = Date.now();
       try {
-        const v = await fetchVerdict(lead, deepMode, signal);
+        // Step 3 — find the company website if the lead sheet didn't have one,
+        // so the intel/verdict pass researches the right company. Best-effort:
+        // a miss just leaves it blank and the verdict proceeds without it.
+        let workingLead = lead;
+        if (!workingLead.companyWebsite && workingLead.companyName) {
+          try {
+            const w = await fetchWebsiteEnrich(workingLead.companyName, signal);
+            if (w.website) {
+              workingLead = { ...workingLead, companyWebsite: w.website };
+              updateRow(lead.id, { lead: workingLead });
+            }
+          } catch {
+            /* website enrichment is best-effort */
+          }
+        }
+        const v = await fetchVerdict(workingLead, deepMode, signal);
         updateRow(lead.id, {
           status: "verdicted",
           intelMarkdown: v.intelMarkdown,
@@ -668,8 +727,24 @@ export function BulkOutreach() {
         const t0 = Date.now();
         try {
           const d = await fetchDocs(lead, intel, docType, signal);
+          // Step 6 — fill the LinkedIn URL + verified email for the CSV. Only
+          // fills blanks, only with cited/verified values; a miss stays blank.
+          let enrichedLead = lead;
+          if (!lead.linkedinUrl || !lead.email) {
+            try {
+              const c = await fetchContactEnrich(lead, signal);
+              enrichedLead = {
+                ...lead,
+                linkedinUrl: lead.linkedinUrl || c.linkedinUrl || "",
+                email: lead.email || c.email || "",
+              };
+            } catch {
+              /* contact enrichment is best-effort */
+            }
+          }
           updateRow(lead.id, {
             status: "completed",
+            lead: enrichedLead,
             outreachMarkdown: d.outreachMarkdown,
             critiqueMarkdown: d.critiqueMarkdown,
             durationMs: verdictMs + d.durationMs,
